@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node src/index.js",
     "setup": "node scripts/install.mjs",
+    "stats": "node scripts/stats.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "files": [

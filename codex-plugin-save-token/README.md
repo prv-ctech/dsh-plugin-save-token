@@ -75,6 +75,24 @@ npm test                         # 82 tests: compression brain + store + tools +
 
 Set them in the config.toml block via the standard `[mcp_servers.save-token.env]` table.
 
+## Seeing actual savings
+
+Every adopted compression and dedupe appends one JSON line to `<spill-root>/stats.jsonl`. View the report:
+
+```bash
+npm run stats                       # totals + per-tool + per-day, with ~saved tokens
+node scripts/stats.mjs --tail 10    # also list the last 10 events
+```
+
+```text
+save-token savings — /Users/you/.codex/save-token/stats.jsonl
+  events: 2 (1 compressions, 1 dedupes)
+  bytes:  87,822 -> 2,064  (saved 85,758 B)
+  tokens: ~23,112 -> ~544  (saved ~22,568 tok, 98% of compressed-input tokens)
+```
+
+Two more observation channels: each compression logs one stderr line (visible in codex logs with `RUST_LOG=info`), and `<spill-root>` fills with the full originals so you can audit exactly what was held back.
+
 ## Spill & retention
 
 Full originals live under `<spill-root>/<YYYYMMDD>/<id>-<tool>.txt` — plain files, readable by any tool, surviving restarts. Pruning is throttled and best-effort: day directories older than 7 days are dropped, and total files are capped at ~800 (oldest first).

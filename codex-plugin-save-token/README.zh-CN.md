@@ -75,6 +75,24 @@ npm test                         # 82 个测试：压缩大脑 + store + tools +
 
 在 config.toml 块里用标准的 `[mcp_servers.save-token.env]` 表设置。
 
+## 查看实际节省
+
+每次采纳的压缩/去重都会向 `<落盘根目录>/stats.jsonl` 追加一行 JSON 事件。查看报告：
+
+```bash
+npm run stats                       # 总量 + 按工具 + 按天，含估算节省 token
+node scripts/stats.mjs --tail 10    # 附带最近 10 条事件明细
+```
+
+```text
+save-token savings — /Users/you/.codex/save-token/stats.jsonl
+  events: 2 (1 compressions, 1 dedupes)
+  bytes:  87,822 -> 2,064  (saved 85,758 B)
+  tokens: ~23,112 -> ~544  (saved ~22,568 tok, 98% of compressed-input tokens)
+```
+
+另外两个观察渠道：每次压缩会打一条 stderr 日志（`RUST_LOG=info` 时可在 codex 日志中看到）；`<落盘根目录>` 里就是完整原文，可随时审计到底省略了什么。
+
 ## 落盘与清理
 
 完整原文存放在 `<落盘根目录>/<YYYYMMDD>/<id>-<tool>.txt` —— 普通文件，任何工具都能读，重启不丢。清理是节流且尽力而为的：超过 7 天的日期目录删除，总量上限约 800 个文件（先删最旧）。

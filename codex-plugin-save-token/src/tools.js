@@ -16,11 +16,11 @@
  */
 
 import { spawn } from 'node:child_process'
-import { promises as fsp } from 'node:fs'
+import { promises as fsp, appendFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  utf8Bytes, fmtInt, dedupeFingerprint,
+  utf8Bytes, estTokens, fmtInt, dedupeFingerprint,
   buildCandidate, buildNotice, effectiveMinBytes
 } from './compress.js'
 
@@ -166,6 +166,17 @@ export class TokenSaver {
     }
   }
 
+  /** Append one saving event to <spill-root>/stats.jsonl (best effort). */
+  trace(event) {
+    try {
+      if (!this.store || !this.store.root) return
+      event.ts = Date.now()
+      // synchronous: saving events are sparse (per adopted compression), and
+      // a sync append keeps the stats file consistent with tool responses
+      appendFileSync(path.join(this.store.root, 'stats.jsonl'), JSON.stringify(event) + '\n')
+    } catch (e) { /* stats must never break the tool */ }
+  }
+
   /** Compress arm: never-worse gates + spill first. Returns { text, compressed, id? }. */
   async maybeCompress(label, text, isError) {
     if (!this.cfg.compressEnabled) return { text: text, compressed: false }
@@ -193,6 +204,7 @@ export class TokenSaver {
     })
     this.rememberOriginal(id, text, ref.locator)
     this.log('compressed ' + label + ': ' + fmtInt(cand.before) + ' -> ' + fmtInt(cand.after) + ' B (' + (cand.lossless ? 'lossless ' : '') + cand.strategy + ')')
+    this.trace({ kind: 'compress', tool: String(label || '').split(':')[0], label: String(label || ''), strategy: cand.strategy, lossless: cand.lossless, before: cand.before, after: cand.after, estBefore: estTokens(text), estAfter: estTokens(cand.text) })
     return { text: finalText, compressed: true, id: id, locator: ref.locator }
   }
 
@@ -222,6 +234,7 @@ export class TokenSaver {
             this.rememberOriginal(did, text, ref.locator)
             this.stats.dedupeHits++
             this.log('deduped rerun (' + agoSec + 's old): ' + labelOf(command))
+            this.trace({ kind: 'dedupe', tool: 'run', label: labelOf(command), strategy: 'dedupe', lossless: true, before: utf8Bytes(text), after: utf8Bytes(stub), estBefore: estTokens(text), estAfter: estTokens(stub) })
             return textResult(stub, false)
           }
         }
