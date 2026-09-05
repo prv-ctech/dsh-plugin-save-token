@@ -91,6 +91,8 @@ save-token savings — /Users/you/.codex/save-token/stats.jsonl
   tokens: ~23,112 -> ~544  (saved ~22,568 tok, 98% of compressed-input tokens)
 ```
 
+**Inline dashboard (no commands needed):** install with `--skill`, then just ask in the conversation — "看看省了多少 token" / "show my save-token stats". The bundled `save-token-dashboard` skill reads `stats.jsonl` and emits an interactive inline visualization through Codex's official inline-HTML contract (`visualize{...}` reference, same mechanism as the built-in Visualize plugin). Renders in the desktop app / IDE; plain terminal TUI falls back to a compact markdown summary.
+
 Two more observation channels: each compression logs one stderr line (visible in codex logs with `RUST_LOG=info`), and `<spill-root>` fills with the full originals so you can audit exactly what was held back.
 
 ## Spill & retention

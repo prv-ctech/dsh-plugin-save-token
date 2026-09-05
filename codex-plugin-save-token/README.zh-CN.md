@@ -91,6 +91,8 @@ save-token savings — /Users/you/.codex/save-token/stats.jsonl
   tokens: ~23,112 -> ~544  (saved ~22,568 tok, 98% of compressed-input tokens)
 ```
 
+**内联 dashboard（无需跑命令）**：用 `--skill` 安装后，直接在对话里说——"看看省了多少 token" / "show my save-token stats"。随包的 `save-token-dashboard` skill 会读取 `stats.jsonl`，并通过 Codex 官方内联 HTML 契约（`visualize{...}` 引用行，与内置 Visualize 插件同机制）在对话里渲染交互式统计面板。桌面端 / IDE 可渲染；纯终端 TUI 自动降级为简洁 markdown 汇总。
+
 另外两个观察渠道：每次压缩会打一条 stderr 日志（`RUST_LOG=info` 时可在 codex 日志中看到）；`<落盘根目录>` 里就是完整原文，可随时审计到底省略了什么。
 
 ## 落盘与清理

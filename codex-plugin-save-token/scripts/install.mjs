@@ -87,12 +87,22 @@ function saveWithBackup(home, text) {
 }
 
 function installSkill(home) {
-  var src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'skill', 'SKILL.md')
-  var dir = path.join(home, 'skills', SERVER_KEY)
-  fs.mkdirSync(dir, { recursive: true })
-  var dst = path.join(dir, 'SKILL.md')
-  fs.copyFileSync(src, dst)
-  console.error('skill installed: ' + dst)
+  var base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  // two skills: usage guidance (save-token) + inline savings dashboard
+  // (save-token-dashboard, rendered via Codex's visualize inline-HTML contract)
+  var skills = [
+    ['skill', SERVER_KEY],
+    ['skill-dashboard', SERVER_KEY + '-dashboard']
+  ]
+  for (var s of skills) {
+    var src = path.join(base, s[0], 'SKILL.md')
+    var dir = path.join(home, 'skills', s[1])
+    fs.mkdirSync(dir, { recursive: true })
+    var dst = path.join(dir, 'SKILL.md')
+    fs.copyFileSync(src, dst)
+    fs.chmodSync(dst, 0o644)
+    console.error('skill installed: ' + dst)
+  }
 }
 
 var argv = process.argv.slice(2)

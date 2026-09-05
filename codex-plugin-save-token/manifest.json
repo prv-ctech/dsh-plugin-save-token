@@ -17,7 +17,7 @@
     "save_token_read": "读取文件：头尾窗口 + 错误行保护 + 表格步进采样，全文落盘",
     "save_token_expand": "按 id 取回压缩通知背后的完整原文（内存缓存 -> 落盘 locator）"
   },
-  "skill": "scripts/install.mjs --skill  # 安装 agent 使用指南到 ~/.codex/skills/save-token/",
+  "skills": ["scripts/install.mjs --skill  # 使用指南 ~/.codex/skills/save-token/", "另装 save-token-dashboard：对话内说「看看省了多少 token」即得内联 dashboard（Codex visualize 内联 HTML 契约）"],
   "spill": {
     "root": "$CODEX_HOME/save-token/spill (fallback ~/.codex/... , SAVE_TOKEN_SPILL_DIR 可覆盖)",
     "retention": "7 天或 800 个文件，进程内节流清理"
