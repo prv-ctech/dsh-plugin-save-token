@@ -91,6 +91,8 @@ save-token savings — /Users/you/.codex/save-token/stats.jsonl
   tokens: ~23,112 -> ~544  (saved ~22,568 tok, 98% of compressed-input tokens)
 ```
 
+**Always-on visibility (two more layers):** every compressed or deduped result automatically ends with a one-line running total — `[save-token cumulative: saved ~22,568 tok / 85,758 B across 2 events]` — so savings are visible in the conversation flow with zero user action. And `npm run dashboard` serves an auto-refreshing local panel (big numbers, per-day bars, recent events) that you keep open beside codex; `open -na "Google Chrome" --args --app=http://127.0.0.1:7788` turns it into a standalone window. Codex itself exposes no sidebar/status-bar extension points (plugin manifests ship only skills / mcp_servers / apps / hooks; the sole hook event is a read-only after-agent), so resident in-app surfaces are not possible today — these two layers are the closest working equivalents.
+
 **Inline dashboard (no commands needed):** install with `--skill`, then just ask in the conversation — "看看省了多少 token" / "show my save-token stats". The bundled `save-token-dashboard` skill reads `stats.jsonl` and emits an interactive inline visualization through Codex's official inline-HTML contract (`visualize{...}` reference, same mechanism as the built-in Visualize plugin). Renders in the desktop app / IDE; plain terminal TUI falls back to a compact markdown summary.
 
 Two more observation channels: each compression logs one stderr line (visible in codex logs with `RUST_LOG=info`), and `<spill-root>` fills with the full originals so you can audit exactly what was held back.

@@ -134,6 +134,36 @@ export class TokenSaver {
     this.originals = new Map() // id -> { text, locator, truncated, ts }
     this.locatorIndex = new Map() // id -> { locator, ts } (survives text-cache eviction)
     this.dedupe = new Map() // fingerprint -> { ts }
+    this.cum = null // cumulative totals across sessions, from stats.jsonl
+  }
+
+  /** Sum every saving event ever recorded, then keep it cached for the session. */
+  async cumulative() {
+    if (this.cum !== null) return this.cum
+    var totals = { savedTok: 0, savedBytes: 0, compressions: 0, dedupes: 0 }
+    try {
+      if (this.store && this.store.root) {
+        var text = await fsp.readFile(path.join(this.store.root, 'stats.jsonl'), 'utf8').catch(function () { return '' })
+        for (var line of text.split('\n')) {
+          if (line.trim() === '') continue
+          try {
+            var e = JSON.parse(line)
+            totals.savedTok += Math.max(0, (e.estBefore || 0) - (e.estAfter || 0))
+            totals.savedBytes += Math.max(0, (e.before || 0) - (e.after || 0))
+            if (e.kind === 'dedupe') totals.dedupes++
+            else totals.compressions++
+          } catch (er) { /* skip damaged line */ }
+        }
+      }
+    } catch (e) { /* totals stay zero */ }
+    this.cum = totals
+    return totals
+  }
+
+  /** One short resident line appended to every saving result. */
+  async cumulativeLine() {
+    var t = await this.cumulative()
+    return '[save-token cumulative: saved ~' + fmtInt(t.savedTok) + ' tok / ' + fmtInt(t.savedBytes) + ' B across ' + (t.compressions + t.dedupes) + ' events]'
   }
 
   shortId(prefix) {
@@ -204,8 +234,15 @@ export class TokenSaver {
     })
     this.rememberOriginal(id, text, ref.locator)
     this.log('compressed ' + label + ': ' + fmtInt(cand.before) + ' -> ' + fmtInt(cand.after) + ' B (' + (cand.lossless ? 'lossless ' : '') + cand.strategy + ')')
+    // load the totals BEFORE tracing this event, then advance the cache
+    // manually — tracing first would double-count via the stats file
+    var cum = await this.cumulative()
     this.trace({ kind: 'compress', tool: String(label || '').split(':')[0], label: String(label || ''), strategy: cand.strategy, lossless: cand.lossless, before: cand.before, after: cand.after, estBefore: estTokens(text), estAfter: estTokens(cand.text) })
-    return { text: finalText, compressed: true, id: id, locator: ref.locator }
+    cum.savedTok += Math.max(0, estTokens(text) - estTokens(cand.text))
+    cum.savedBytes += cand.before - cand.after
+    cum.compressions++
+    var cumLine = await this.cumulativeLine()
+    return { text: finalText + '\n' + cumLine, compressed: true, id: id, locator: ref.locator }
   }
 
   // ---------- tool: save_token_run ----------
@@ -234,7 +271,12 @@ export class TokenSaver {
             this.rememberOriginal(did, text, ref.locator)
             this.stats.dedupeHits++
             this.log('deduped rerun (' + agoSec + 's old): ' + labelOf(command))
+            var cumD = await this.cumulative() // before trace() to avoid double-count
             this.trace({ kind: 'dedupe', tool: 'run', label: labelOf(command), strategy: 'dedupe', lossless: true, before: utf8Bytes(text), after: utf8Bytes(stub), estBefore: estTokens(text), estAfter: estTokens(stub) })
+            cumD.savedTok += Math.max(0, estTokens(text) - estTokens(stub))
+            cumD.savedBytes += utf8Bytes(text) - utf8Bytes(stub)
+            cumD.dedupes++
+            stub += '\n' + await this.cumulativeLine()
             return textResult(stub, false)
           }
         }

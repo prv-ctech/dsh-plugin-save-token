@@ -12,6 +12,7 @@
     "start": "node src/index.js",
     "setup": "node scripts/install.mjs",
     "stats": "node scripts/stats.mjs",
+    "dashboard": "node scripts/dashboard.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "files": [

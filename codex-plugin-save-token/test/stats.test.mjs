@@ -75,3 +75,32 @@ test('tool records dedupe stubs as saving events too', async () => {
   assert.equal(events.filter(function (e) { return e.kind === 'compress' }).length, 1)
   assert.equal(events.filter(function (e) { return e.kind === 'dedupe' }).length, 1)
 })
+
+test('cumulative line rides every saving result and never double-counts', async () => {
+  var saver = makeSaver()
+  var cmd = 'seq 0 2999 | sed "s/^/cum-/"'
+  var r1 = await saver.runTool({ command: cmd })
+  var cum1 = (r1.content[0].text.match(/save-token cumulative: saved ~([\d,]+) tok/) || [])[1]
+  assert.ok(cum1, 'first compressed result carries a cumulative line')
+  var r2 = await saver.runTool({ command: cmd }) // dedupe
+  assert.ok(r2.content[0].text.includes('save-token cumulative'))
+  var n1 = Number(cum1.replace(/,/g, ''))
+  var n2 = Number((r2.content[0].text.match(/saved ~([\d,]+) tok/) || [])[1].replace(/,/g, ''))
+  assert.ok(n2 > n1, 'cumulative grows across events (no double-count): ' + n1 + ' -> ' + n2)
+  // file totals agree with the cache, proving trace/cumulative stay in sync
+  var report = aggregateStats(eventsOf(saver.root))
+  assert.equal(report.totals.savedTokens, n2)
+})
+
+test('buildReport aggregates a stats file and tolerates a missing one', async () => {
+  var { buildReport } = await import('../scripts/dashboard.mjs')
+  var root = fs.mkdtempSync(path.join(os.tmpdir(), 'save-token-dash-'))
+  fs.writeFileSync(path.join(root, 'stats.jsonl'), JSON.stringify({ ts: 1, kind: 'compress', tool: 'run', before: 5000, after: 1000, estBefore: 1500, estAfter: 300 }) + '\n')
+  var r = buildReport(path.join(root, 'stats.jsonl'))
+  assert.equal(r.totals.savedTokens, 1200)
+  assert.equal(r.recent.length, 1)
+  assert.equal(r.hasFile, true)
+  var missing = buildReport(path.join(root, 'nope.jsonl'))
+  assert.equal(missing.totals.events, 0)
+  assert.equal(missing.hasFile, false)
+})

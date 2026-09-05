@@ -91,6 +91,8 @@ save-token savings — /Users/you/.codex/save-token/stats.jsonl
   tokens: ~23,112 -> ~544  (saved ~22,568 tok, 98% of compressed-input tokens)
 ```
 
+**常驻可见性（再补两层）**：每条压缩/去重结果都自动附一行累计总计——`[save-token cumulative: saved ~22,568 tok / 85,758 B across 2 events]`——节省随对话流自动可见，零操作。`npm run dashboard` 还会启动一个自动刷新的本地面板（大数字、按天柱状、最近事件），放在 codex 旁边常驻；`open -na "Google Chrome" --args --app=http://127.0.0.1:7788` 可变成独立小窗。Codex 本身没有侧边栏/状态栏扩展点（插件清单只有 skills / mcp_servers / apps / hooks，唯一 hook 事件是只读的 after-agent），应用内常驻面板现阶段做不到——这两层是最接近的可用等价物。
+
 **内联 dashboard（无需跑命令）**：用 `--skill` 安装后，直接在对话里说——"看看省了多少 token" / "show my save-token stats"。随包的 `save-token-dashboard` skill 会读取 `stats.jsonl`，并通过 Codex 官方内联 HTML 契约（`visualize{...}` 引用行，与内置 Visualize 插件同机制）在对话里渲染交互式统计面板。桌面端 / IDE 可渲染；纯终端 TUI 自动降级为简洁 markdown 汇总。
 
 另外两个观察渠道：每次压缩会打一条 stderr 日志（`RUST_LOG=info` 时可在 codex 日志中看到）；`<落盘根目录>` 里就是完整原文，可随时审计到底省略了什么。
