@@ -1,0 +1,48 @@
+{
+  "name": "codex-plugin-save-token",
+  "version": "1.0.0",
+  "description": "只降 token、不降智的 Codex CLI 插件（MCP stdio server）：结构感知压缩 + TOON 式无损编码优先 + 可逆落盘 + save_token_expand 取回全文",
+  "format": "OpenAI Codex CLI plugin (MCP stdio server, config.toml [mcp_servers.save-token])",
+  "install": "node scripts/install.mjs   (或 codex mcp add save-token -- node <abs>/src/index.js)",
+  "entry": {
+    "mcp": "node ./src/index.js",
+    "transport": "stdio (newline-delimited JSON-RPC 2.0)"
+  },
+  "requires": {
+    "codex": ">=0.20 (MCP support)",
+    "runtime": "node >=18, zero npm dependencies"
+  },
+  "tools": {
+    "save_token_run": "运行 shell 命令：超大输出结构感知压缩（无损 TOON 优先），全文落盘，附 [save-token #id] 通知",
+    "save_token_read": "读取文件：头尾窗口 + 错误行保护 + 表格步进采样，全文落盘",
+    "save_token_expand": "按 id 取回压缩通知背后的完整原文（内存缓存 -> 落盘 locator）"
+  },
+  "skill": "scripts/install.mjs --skill  # 安装 agent 使用指南到 ~/.codex/skills/save-token/",
+  "spill": {
+    "root": "$CODEX_HOME/save-token/spill (fallback ~/.codex/... , SAVE_TOKEN_SPILL_DIR 可覆盖)",
+    "retention": "7 天或 800 个文件，进程内节流清理"
+  },
+  "configDefaults": {
+    "compressEnabled": true,
+    "dedupeEnabled": true,
+    "minBytes": 1400,
+    "errorMinBytes": 6000,
+    "minSavingBytes": 500,
+    "keepRatioMax": 0.72,
+    "maxLines": 240,
+    "headLines": 140,
+    "tailLines": 80,
+    "tabularHeadRows": 60,
+    "tabularTailRows": 40,
+    "tabularStrideSamples": 50,
+    "longLineChars": 420,
+    "jsonMaxParseBytes": 524288,
+    "jsonlMinLines": 8,
+    "noticeFullTrailerCount": 3,
+    "dedupeTtlMs": 600000,
+    "runTimeoutSec": 120,
+    "runTimeoutSecMax": 600,
+    "maxCaptureBytes": 2097152
+  },
+  "lineage": "压缩大脑逐行移植自 dsh-plugin-save-token v2.4.1 src/compress.js（算法零改动，测试套件同步移植）"
+}

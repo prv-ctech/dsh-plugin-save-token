@@ -4,6 +4,8 @@ English | [简体中文](./README.zh-CN.md)
 
 **In one sentence: a DeepSeek Harness (dsh) dynamic plugin that cuts token cost without cutting model intelligence.**
 
+> **Codex user?** The same token-optimization brain ships as a standard Codex CLI plugin (MCP stdio server) in [`codex-plugin-save-token/`](./codex-plugin-save-token/) — see its [README](./codex-plugin-save-token/README.md).
+
 It slims down oversized tool outputs at the entrance of every model request — **reversibly and structure-aware**. The full original text is always saved to disk; what the model sees is always a condensed version carrying a retrieval path. Every optimization obeys one red line: **any replacement must be restorable in one step**, and the estimated token count after compression must be strictly smaller than the original.
 
 ---

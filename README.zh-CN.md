@@ -4,6 +4,8 @@
 
 **一句话：让 DeepSeek Harness（dsh）会话"只降 token 成本，不降智能水平"的动态插件。**
 
+> **Codex 用户？** 同一套 token 优化大脑已移植为标准 Codex CLI 插件（MCP stdio server），见 [`codex-plugin-save-token/`](./codex-plugin-save-token/)（[中文说明](./codex-plugin-save-token/README.zh-CN.md)）。
+
 它在模型请求的入口对超大工具输出做**可逆、结构感知**的瘦身——原文永远完整保存在磁盘上，模型看到的永远是带取回路径的精简版。所有优化都遵守一条红线：**任何替换必须能一键还原**，且压缩后的估算 token 必须严格小于原值。
 
 ---
