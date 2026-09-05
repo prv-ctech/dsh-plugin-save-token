@@ -132,3 +132,24 @@ test('MCP stdio: malformed line gets a Parse error response with null id', async
     client.stop()
   }
 })
+
+test('MCP stdio: in-flight response flushes even when stdin closes mid-call', async () => {
+  var spillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'save-token-mcp4-'))
+  var child = spawn(process.execPath, [ENTRY], {
+    env: Object.assign({}, process.env, { SAVE_TOKEN_SPILL_DIR: spillDir }),
+    stdio: ['pipe', 'pipe', 'pipe']
+  })
+  // close stdin immediately after the request: the run tool is still in
+  // flight, and its response must still be written before exit
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'save_token_run', arguments: { command: 'echo drain-check' } } }) + '\n')
+  child.stdin.end()
+  var out = ''
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', function (c) { out += c })
+  var code = await new Promise(function (resolve) { child.on('close', function (c) { resolve(c) }) })
+  var lines = out.split('\n').filter(function (l) { return l.trim() !== '' }).map(function (l) { return JSON.parse(l) })
+  var answer = lines.find(function (m) { return m.id === 7 })
+  assert.ok(answer, 'response for id 7 must arrive before exit')
+  assert.ok(answer.result.content[0].text.includes('drain-check'))
+  assert.equal(code, 0)
+})

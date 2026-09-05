@@ -69,7 +69,8 @@ export class McpStdioServer {
   }
 
   write(msg) {
-    if (this.stopped) return
+    // no `stopped` gate here: stop() drains in-flight dispatches first, and
+    // their responses must still reach the client before the stream closes
     this.output.write(JSON.stringify(msg) + '\n')
   }
 

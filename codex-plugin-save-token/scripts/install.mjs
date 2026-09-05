@@ -59,12 +59,13 @@ function patchBlock(text, replacement) {
 }
 
 function blockText(entry) {
+  // minimal key set: parsed by codex 0.77 through latest — richer keys
+  // (startup_timeout_sec, cwd, ...) make some versions drop the whole entry
   return [
     HEADER,
     'type = "stdio"',
     'command = ' + JSON.stringify(process.execPath),
     'args = [' + JSON.stringify(entry) + ']',
-    'startup_timeout_sec = 30',
     ''
   ].join('\n')
 }

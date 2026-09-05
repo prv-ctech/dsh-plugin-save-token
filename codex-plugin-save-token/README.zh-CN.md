@@ -48,7 +48,6 @@ node scripts/install.mjs --skill  # 可选：同时安装 agent 使用指南 ski
 type = "stdio"
 command = "node"                 # 建议写 node 的绝对路径
 args = ["/绝对路径/codex-plugin-save-token/src/index.js"]
-startup_timeout_sec = 30
 ```
 
 验证：

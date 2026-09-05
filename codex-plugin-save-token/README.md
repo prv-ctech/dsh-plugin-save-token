@@ -48,7 +48,6 @@ The installer is idempotent, backs up `config.toml` first (`config.toml.bak.save
 type = "stdio"
 command = "node"                 # absolute node path is even better
 args = ["/absolute/path/to/codex-plugin-save-token/src/index.js"]
-startup_timeout_sec = 30
 ```
 
 Verify:
