@@ -231,7 +231,7 @@ export function apply(ctx, config) {
     try {
       var ref = await store.saveText({
         owner: { sessionId: sessionId },
-        source: { toolName: toolName, callId: callId, label: 'result' },
+        source: { kind: 'tool', toolName: toolName, callId: callId, label: 'result' },
         suggestedName: toolName + '.txt',
         content: text
       })
@@ -509,6 +509,14 @@ export function apply(ctx, config) {
             return
           }
           if (req.method === 'POST' && (action === 'set-enabled' || action === 'reset')) {
+            // same-origin guard: prefix routes have no host trust fence here (PORTING §11.1 Δ5)
+            const fetchSite = req.headers['sec-fetch-site']
+            let sameOrigin = fetchSite === undefined || fetchSite === 'same-origin' || fetchSite === 'none'
+            const originHeader = req.headers['origin'] || req.headers['referer']
+            if (sameOrigin && originHeader) {
+              try { sameOrigin = new URL(String(originHeader)).host === req.headers['host'] } catch (e) { sameOrigin = false }
+            }
+            if (!sameOrigin) { sendJson(res, 403, { ok: false, error: 'cross-origin POST rejected' }); return }
             let args = {}
             try {
               const chunks = []
