@@ -2,7 +2,7 @@
 # the web profile roster (applied as a profile bundle layer through the
 # `dsh.bundle.patch` manifest field). Install with:
 #
-#   dsh plugin --profile web add github:vibe-any/dsh-plugin-save-token
+#   dsh plugin --profile web add /absolute/path/to/dsh-plugin-save-token
 #
 # The row references the package by name: the node half (exports ".") runs in
 # the host process (waterfall hooks / tools / API routes), and the
