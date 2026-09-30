@@ -52,10 +52,16 @@ Lives in the `config:` block of the `save-token` row in
 One trap: a later patch layer that overrides **one** key replaces the whole
 `config` block — restate every key you want to keep.
 
+The panel toggles (`compressEnabled`, `dedupeEnabled`, `compactAssistEnabled`)
+are persisted to `$DSH_HOME/plugin-state/save-token-state.json` and re-applied on
+startup, so a toggle survives a restart and outranks the profile `config` block
+(most recent user intent wins). Delete that file to fall back to the profile
+config.
+
 ## Development
 
 ```sh
-npm test        # node --test, 5 suites
+npm test        # node --test
 node build.mjs  # rebuild lib/ (committed, so installs need no build step)
 ```
 
