@@ -5,7 +5,7 @@ Cuts token cost in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-ha
 original still goes to disk and the model keeps a path back to it — nothing is
 thrown away.
 
-Local fork (v2.4.2) of `vibe-any/dsh-plugin-save-token` (MIT), ported to host
+Local fork (v2.4.3) of `vibe-any/dsh-plugin-save-token` (MIT), ported to host
 `0.1.7-rc.2`. The compression logic is upstream's, unchanged. A separate Codex CLI
 plugin ships alongside it in [`codex-plugin-save-token/`](./codex-plugin-save-token/).
 
