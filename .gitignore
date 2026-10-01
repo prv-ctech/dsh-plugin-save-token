@@ -5,3 +5,10 @@ node_modules/
 /bench/repair-plan.md
 /bench/verification.md
 /ponytail_review_result.txt
+
+# Internal benchmark narrative/derived reports — not published
+/bench/report_*.md
+/bench/results/summary.md
+/bench/results/summary-r2.md
+/bench/tasks/protocol.md
+/bench/tasks/judge_commands.md
