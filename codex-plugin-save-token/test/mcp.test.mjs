@@ -58,6 +58,7 @@ test('MCP stdio: initialize -> tools/list -> call -> expand, protocol-clean', as
     })
     assert.equal(init.result.protocolVersion, '2025-06-18')
     assert.equal(init.result.serverInfo.name, 'save-token')
+    assert.equal(init.result.serverInfo.version, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version)
     assert.ok(init.result.capabilities.tools)
 
     // 2. initialized notification must NOT produce a response

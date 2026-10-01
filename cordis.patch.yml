@@ -31,8 +31,3 @@
         noticeFullTrailerCount: 3
         dedupeTtlMs: 600000
         dedupeTtlOverrides: {}
-        compactAssistEnabled: false
-        compactBudgetTokens: 120000
-        compactCooldownMs: 600000
-        contextWindowTokens: 0
-        compactWatermarkRatio: 0.85

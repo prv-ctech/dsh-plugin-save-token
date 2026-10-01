@@ -22,9 +22,10 @@ test('compressJsonText: dominant flat array -> lossless TOON (golden shape)', ()
   assert.equal(r.lossless, true)
   assert.equal(r.strategy, 'toon-array')
   var lines = r.text.split('\n')
-  assert.equal(lines[0], 'prices[300]{model,input,output}:')
-  assert.equal(lines.length, 301)
-  assert.equal(lines[1], 'm0,0,0')
+  assert.equal(lines[0], '{}') // root object is not a root array
+  assert.equal(lines[1], 'prices[300]{model,input,output}:')
+  assert.equal(lines.length, 302)
+  assert.equal(lines[2], 'm0,0,0')
 })
 
 test('compressJsonText: root array itself is tabularized', () => {

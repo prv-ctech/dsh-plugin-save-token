@@ -15,13 +15,12 @@
  */
 
 import fs from 'node:fs'
-import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { McpStdioServer } from './mcp.js'
 import { SpillStore, resolveSpillRoot } from './store.js'
 import { TokenSaver, defaultConfig, applyEnv, toolDefinitions } from './tools.js'
 
-export var VERSION = '1.0.0'
+export var VERSION = '1.0.1'
 
 export function createServer(opts) {
   opts = opts || {}

@@ -1,5 +1,5 @@
 /*!
- * dsh-plugin-save-token v2.4.1 — Host half (node)
+ * dsh-plugin-save-token v2.4.5 — Host half (node)
  *
  * Standard Cordis plugin loaded from the bundle layer declared in
  * cordis.patch.yml (`dsh plugin --profile web add <pkg>`). Contract:
@@ -7,12 +7,16 @@
  * - `inject = ['tools', 'webServer']` — the dsh-tools registry for the
  *   `save_token_expand` dynamic tool, and the web server surface for the
  *   package-private JSON API consumed by the client dashboard.
- * - `spillStore` and `compaction` are read lazily with ctx.get() and both are
- *   optional at runtime: missing spillStore keeps compression permanently off
- *   (reversibility first), missing compaction only disables the pressure
- *   assist.
- * - Waterfalls: `tools/post-execute` (prepend), `llm/stream`, and
- *   `agent/pre-step`.
+ * - `spillStore` is read lazily with ctx.get() and is optional at runtime:
+ *   a missing spill store keeps compression permanently off (reversibility
+ *   first).
+ * - Waterfalls: `tools/post-execute` (prepend) and `llm/stream`. The
+ *   compaction assist was REMOVED in v2.4.4: dsh mounts `compaction-basic`
+ *   inside an isolated group (`isolate: { compaction: true }`) and cordis
+ *   resolves an isolated service only inside its own scope, so a top-level
+ *   plugin can never reach `ctx.compaction`. dsh's own engine still performs
+ *   automatic pressure compaction; install a dedicated compaction plugin if
+ *   you need a different policy.
  *
  * v2.2.0 changes (all pure-compression logic moved to ./compress.js for unit
  * testing; behavior fixes marked):
@@ -36,13 +40,6 @@
  *
  * v2.3.0 changes (cache-aware layer; bench evidence: 88.9% of input tokens
  * ride the provider prompt cache, billed at ~1/30 of the miss price):
- * - compaction assist now defaults OFF and is repositioned as an
- *   anti-overflow measure: rewriting history converts cheap cached replay
- *   into full-price input (break-even ~60 requests on a 120k->40k
- *   summarization), so it must never be sold as a saver;
- * - the watermark prefers the last REAL billed input for the session over
- *   the heuristic estimate, and scales with the model context window
- *   (contextWindowTokens x compactWatermarkRatio) when known;
  * - cacheRead/cacheWrite are metered separately and surfaced as a cache-hit
  *   sentinel KPI (any change that tanks it is saving tokens while raising
  *   real cost);
@@ -50,9 +47,10 @@
  *   the avoided-token accounting without bundling a tokenizer.
  *
  * v2.4.0 changes:
- * - dedupe TTL default raised 90s -> 600s (fingerprints are full-length and
- *   byte-exact, so an identical replay carries no new information; the stub
- *   already tells the model to re-run when freshness matters) with
+ * - dedupe TTL default raised 90s -> 600s (adoption literally compares the
+ *   retained full args + content, so an identical replay carries no new
+ *   information; the stub already tells the model to re-run when freshness
+ *   matters) with
  *   per-tool overrides (`dedupeTtlOverrides`, 0 disables dedupe for a tool);
  * - error-line protection in plain-text windows widened to ±1 context line;
  * - `save_token_expand` survives restarts/eviction via a persistent
@@ -63,14 +61,15 @@
  *   touched.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   utf8Bytes, estTokens, fmtInt,
   argsToString, dedupeFingerprint,
-  buildCandidate, buildNotice, effectiveMinBytes
+  buildCandidate, buildNotice, gate
 } from './compress.js'
 
 export const name = 'save-token'
@@ -97,12 +96,7 @@ export function apply(ctx, config) {
     jsonlMinLines: 8,
     noticeFullTrailerCount: 3,
     dedupeTtlMs: 600000,
-    dedupeTtlOverrides: {},
-    compactAssistEnabled: false,
-    compactBudgetTokens: 120000,
-    compactCooldownMs: 600000,
-    contextWindowTokens: 0,
-    compactWatermarkRatio: 0.85
+    dedupeTtlOverrides: {}
   }
   if (config && typeof config === 'object') {
     for (var ck in cfg) {
@@ -116,7 +110,7 @@ export function apply(ctx, config) {
   // booleans under $DSH_HOME/plugin-state (atomic tmp+rename), which sits
   // outside node_modules and survives plugin reinstalls. A saved value outranks
   // the profile config because it is the more recent user intent.
-  var PERSIST_KEYS = ['compressEnabled', 'dedupeEnabled', 'compactAssistEnabled']
+  var PERSIST_KEYS = ['compressEnabled', 'dedupeEnabled']
   var statePath = null
   try { statePath = join(dshHomePath('plugin-state'), 'save-token-state.json') }
   catch (e) { console.error('save-token: dshHomePath unavailable, config persistence disabled', e) }
@@ -146,10 +140,77 @@ export function apply(ctx, config) {
 
   loadState()
 
+  // ---------- locator index survives restart ----------
+  // The marker -> spill-locator index is persisted as a bounded sidecar (same
+  // plugin-state home as the toggles, separate file) so `save_token_expand`
+  // can hand back the spill path after a restart/new process instead of a
+  // dead end. Caps mirror the in-memory eviction; the notice text remains the
+  // gold-standard recovery channel when this index has already evicted an id.
+  var locatorStatePath = null
+  try { locatorStatePath = join(dshHomePath('plugin-state'), 'save-token-locators.json') }
+  catch (e) { console.error('save-token: dshHomePath unavailable, locator persistence disabled', e) }
+
+  var LOCATOR_MAX_BYTES = 4194304
+  var LOCATOR_MAX_ENTRY_BYTES = 4096
+
+  function validLocator(id, entry) {
+    return /^[a-z0-9]{1,64}$/.test(id) && entry && !Array.isArray(entry) &&
+      typeof entry.locator === 'string' && entry.locator.length > 0 &&
+      utf8Bytes(entry.locator) <= LOCATOR_MAX_ENTRY_BYTES &&
+      Number.isSafeInteger(entry.ts) && entry.ts >= 0
+  }
+
+  function rememberLocator(id, entry) {
+    if (!validLocator(id, entry)) return false
+    var old = locatorIndex.get(id)
+    if (old) locatorRetainedBytes -= utf8Bytes(JSON.stringify({ [id]: old }))
+    var value = { locator: entry.locator, ts: entry.ts }
+    locatorIndex.set(id, value)
+    locatorRetainedBytes += utf8Bytes(JSON.stringify({ [id]: value }))
+    var target = locatorIndex.size > 4000 ? 3200 : 4000
+    while (locatorIndex.size > target || locatorRetainedBytes > LOCATOR_MAX_BYTES - 32) {
+      var first = locatorIndex.keys().next().value
+      locatorRetainedBytes -= utf8Bytes(JSON.stringify({ [first]: locatorIndex.get(first) }))
+      locatorIndex.delete(first)
+    }
+    return locatorIndex.has(id)
+  }
+
+  function loadLocatorState() {
+    if (locatorStatePath === null) return
+    var fd
+    try {
+      fd = openSync(locatorStatePath, 'r')
+      var size = fstatSync(fd).size
+      if (size > LOCATOR_MAX_BYTES) return
+      // A fixed-size read also bounds allocation if the file grows after stat.
+      var buffer = Buffer.alloc(size + 1), used = 0, n
+      while (used < buffer.length && (n = readSync(fd, buffer, used, buffer.length - used, null)) > 0) used += n
+      if (used > size) return
+      var saved = JSON.parse(buffer.subarray(0, used).toString('utf8'))
+      var entries = saved && saved.version === 1 ? saved.entries : null
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return
+      Object.entries(entries).filter(function (pair) { return validLocator(pair[0], pair[1]) })
+        .sort(function (a, b) { return a[1].ts - b[1].ts }).slice(-4000)
+        .forEach(function (pair) { rememberLocator(pair[0], pair[1]) })
+    } catch (e) { /* missing/corrupt/oversized sidecar: use the notice's path */ }
+    finally { if (fd !== undefined) closeSync(fd) }
+  }
+
+  function persistLocators() {
+    if (locatorStatePath === null) return
+    try {
+      var out = { version: 1, entries: Object.fromEntries(locatorIndex) }
+      mkdirSync(dirname(locatorStatePath), { recursive: true })
+      var tmp = locatorStatePath + '.tmp'
+      writeFileSync(tmp, JSON.stringify(out), 'utf8')
+      renameSync(tmp, locatorStatePath)
+    } catch (e) { console.error('save-token: locator persist failed', e) }
+  }
+
   var startedAt = Date.now()
   var totals = { requests: 0, auxRequests: 0, inputTokens: 0, cachedTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0, avoidedTokens: 0, estPromptTokens: 0 }
   var comp = { count: 0, bytesBefore: 0, bytesAfter: 0, dedupeHits: 0, dedupeSavedBytes: 0, replays: 0, losslessEncodes: 0, tabularWindows: 0, topLevelCalls: 0, nestedCalls: 0 }
-  var compactStats = { attempts: 0, done: 0, skipped: 0 }
   var records = []
   var recent = []
   var byTool = new Map()
@@ -157,21 +218,18 @@ export function apply(ctx, config) {
   var dedupeCache = new Map()
   var originals = new Map()
   var locatorIndex = new Map()
-  var lastEstBySession = new Map()
-  var lastBilledBySession = new Map()
-  var lastCompactAt = new Map()
+  var locatorRetainedBytes = 0
   var calibration = new Map()
-  var seq = 0
   var spillAvailable = null
   var lastSkip = ''
+  loadLocatorState() // after the state maps exist
 
   // ---------- online token-estimate calibration (D1) ----------
   // Every request yields real billed input alongside this plugin's heuristic
   // estimate; a per-model EMA of actual/estimate keeps the avoided-token
-  // accounting and the compaction watermark honest without bundling a
-  // tokenizer. The compression token gate itself needs no calibration: the
-  // candidate and its original share the same script mix, so the ratio
-  // cancels in that comparison.
+  // accounting honest without bundling a tokenizer. The compression token gate
+  // needs no calibration: the candidate and its original share the same script
+  // mix, so the ratio cancels in that comparison.
   function ratioFor(model) {
     var ent = calibration.get(model || '')
     return ent ? ent.ratio : 1
@@ -194,20 +252,11 @@ export function apply(ctx, config) {
     }
   }
 
-  // ---------- compaction watermark (A1/A2) ----------
-  // Cost guard: on cache-priced routes (DeepSeek bills cache hits at 1/30 of
-  // the miss price) rewriting history converts cheap cached replay into
-  // full-price input and breaks even only after ~60 further requests in a
-  // 120k->40k summarization. Token counts drop; real cost usually does not.
-  // So the assist now defaults OFF and is documented as an anti-overflow
-  // measure (protects the model from hard truncation), not a saver — turn it
-  // on when sessions grow past the watermark, not to cut spend. The
-  // watermark prefers the last REAL billed input (A2) over the plugin's own
-  // estimate, and scales with the model's context window when known.
-  function compactWatermark() {
-    if (cfg.contextWindowTokens > 0) return Math.round(cfg.contextWindowTokens * cfg.compactWatermarkRatio)
-    return cfg.compactBudgetTokens
-  }
+  // ---------- compaction: intentionally absent ----------
+  // The assist was removed (v2.4.4). dsh mounts `compaction-basic` inside an
+  // isolated group, and cordis resolves an isolated service only within its
+  // own scope, so `ctx.get('compaction')` is undefined for a top-level plugin
+  // and the assist could never run. dsh's engine still auto-compacts.
 
   function noteRecent(kind, label, detail, savedTokens) {
     recent.unshift({ ts: Date.now(), kind: kind, label: String(label || ''), detail: String(detail || ''), saved: savedTokens || 0 })
@@ -215,7 +264,15 @@ export function apply(ctx, config) {
   }
 
   // ---------- estimators (implemented in ./compress.js) ----------
-  function shortId(prefix) { seq = (seq + 1) % 1679616; return prefix + seq.toString(36) + Math.floor(Math.random() * 1296).toString(36) }
+  // Native UUIDs avoid sequence wrap/restart reuse; strip hyphens for the
+  // existing marker alphabet. Guard retained IDs even if the generator repeats.
+  // Legacy short IDs remain readable from the persisted index.
+  function shortId(prefix) {
+    for (;;) {
+      var id = prefix + randomUUID().replace(/-/g, '')
+      if (!originals.has(id) && !locatorIndex.has(id) && !compressedIndex.has(id)) return id
+    }
+  }
 
   function flattenPlainText(content) {
     var text = ''
@@ -233,15 +290,12 @@ export function apply(ctx, config) {
   }
 
   function rememberOriginal(id, text, locator) {
+    // Oversized/custom locators remain recoverable from the original notice,
+    // but never enter bounded caches or the persisted lookup index.
+    if (!rememberLocator(id, { locator: locator, ts: Date.now() })) return
     var truncated = text.length > 262144
     originals.set(id, { text: truncated ? text.slice(0, 262144) : text, locator: locator, truncated: truncated, ts: Date.now() })
-    // small side index: id -> locator survives original-text eviction, so the
-    // expand tool can still point at the spill file after a restart window
-    locatorIndex.set(id, { locator: locator, ts: Date.now() })
-    if (locatorIndex.size > 4000) {
-      var dropL = locatorIndex.keys()
-      while (locatorIndex.size > 3200) { var lx = dropL.next(); if (lx.done) break; locatorIndex.delete(lx.value) }
-    }
+    persistLocators()
     if (originals.size > 160) {
       var it = originals.keys()
       while (originals.size > 120) { var nx = it.next(); if (nx.done) break; originals.delete(nx.value) }
@@ -263,6 +317,32 @@ export function apply(ctx, config) {
     byTool.set(toolName, e)
   }
 
+  // ---------- dedupe identity bookkeeping ----------
+  // The 32-bit fingerprint is only a bucket key; BYTE-IDENTICAL claims need
+  // literal comparison of the retained full args + content at adoption. The
+  // retained-text budget is bounded, so an entry too big to compare later is
+  // dropped and dedupe silently does not fire for it — never a false stub.
+  var DEDUPE_MAX_ENTRY = 2097152 // retained chars per entry
+  var DEDUPE_MAX_CHARS = 8388608 // total retained verification budget
+  var dedupeRetainedChars = 0
+  function rememberDedupe(fp, ts, callId, args, content) {
+    var old = dedupeCache.get(fp)
+    if (old) dedupeRetainedChars -= old.args.length + old.content.length
+    if (args.length + content.length > DEDUPE_MAX_ENTRY) {
+      dedupeCache.delete(fp)
+      return
+    }
+    dedupeCache.set(fp, { ts: ts, callId: callId, args: args, content: content })
+    dedupeRetainedChars += args.length + content.length
+    while (dedupeCache.size > 800 || dedupeRetainedChars > DEDUPE_MAX_CHARS) {
+      var itD = dedupeCache.keys(), nxD = itD.next()
+      if (nxD.done) break
+      var eD = dedupeCache.get(nxD.value)
+      dedupeCache.delete(nxD.value)
+      dedupeRetainedChars -= eD.args.length + eD.content.length
+    }
+  }
+
   async function spillOriginal(text, sessionId, toolName, callId) {
     var store = ctx.get('spillStore')
     spillAvailable = store !== undefined
@@ -275,7 +355,7 @@ export function apply(ctx, config) {
         suggestedName: toolName + '.txt',
         content: text
       })
-      if (!ref || typeof ref.locator !== 'string') { lastSkip = 'spill ref had no locator'; return undefined }
+      if (!ref || typeof ref.locator !== 'string' || ref.locator.length === 0) { lastSkip = 'spill ref had no locator'; return undefined }
       return ref
     } catch (e) { lastSkip = 'spill save failed: ' + String(e); return undefined }
   }
@@ -305,68 +385,80 @@ export function apply(ctx, config) {
     var isError = result.isError === true
     var sessionId = ownerSessionId(exec)
 
-    // dedupe arm (headroom cross-turn dedup). Fingerprints are byte-exact,
-    // so a longer TTL is information-safe; freshness-sensitive tools can opt
-    // out via dedupeTtlOverrides (0 = never dedupe that tool).
+    // dedupe arm (headroom cross-turn dedup). The 32-bit fingerprint is only
+    // a bucket key: adoption also compares the retained full args + content
+    // literally, so colliding hashes can never claim BYTE-IDENTICAL output.
+    // Freshness-sensitive tools can opt out via dedupeTtlOverrides (0 = never
+    // dedupe that tool).
     if (cfg.dedupeEnabled && !isError) {
       var ttl = Object.prototype.hasOwnProperty.call(cfg.dedupeTtlOverrides, exec.name) ? cfg.dedupeTtlOverrides[exec.name] : cfg.dedupeTtlMs
       if (ttl > 0) {
-        var fp = dedupeFingerprint(sessionId, exec.name, argsToString(exec.arguments), text)
+        var argsText = argsToString(exec.arguments)
+        var fp = dedupeFingerprint(sessionId, exec.name, argsText, text)
         var prev = dedupeCache.get(fp)
         var now = Date.now()
-        if (prev && now - prev.ts <= ttl) {
+        if (prev && now - prev.ts <= ttl && prev.args === argsText && prev.content === text) {
           var ref2 = await spillOriginal(text, sessionId, exec.name, exec.callId)
           if (ref2 !== undefined) {
             var did = shortId('d')
             var agoSec = Math.round((now - prev.ts) / 1000)
             var stub = '[save-token #' + did + ' deduped: this ' + exec.name + ' call returned BYTE-IDENTICAL output to a call ' + agoSec + 's ago, which remains in context above. Do not answer from this stub alone; retrieve the earlier message, or re-run if freshness matters. Full copy of THIS call stored at: ' + ref2.locator + '. ' + (ref2.retrievalHint || '') + ']'
-            var savedB = utf8Bytes(text) - utf8Bytes(stub)
-            if (savedB > cfg.minSavingBytes) {
+            var stubGate = gate({ text: stub }, text, cfg)
+            if (stubGate !== null) {
               rememberOriginal(did, text, ref2.locator)
-              comp.dedupeHits++; comp.dedupeSavedBytes += savedB
+              comp.dedupeHits++; comp.dedupeSavedBytes += stubGate.before - stubGate.after
               rememberCompressed(did, text, stub, exec.name)
               noteRecent('dedupe', exec.name, 'identical output within ' + agoSec + 's -> stubbed', estTokens(text) - estTokens(stub))
               return { kind: 'accept', content: [{ type: 'text', text: stub }] }
             }
           }
         }
-        dedupeCache.set(fp, { ts: now, callId: exec.callId })
-        if (dedupeCache.size > 800) {
-          var dk = dedupeCache.keys()
-          while (dedupeCache.size > 500) { var dn = dk.next(); if (dn.done) break; dedupeCache.delete(dn.value) }
-        }
+        rememberDedupe(fp, now, exec.callId, argsText, text)
       }
     }
 
     // compress arm
     if (!cfg.compressEnabled) return decision
-    var threshold = effectiveMinBytes(isError ? cfg.errorMinBytes : cfg.minBytes, cfg.minSavingBytes, cfg.keepRatioMax)
+    var threshold = isError ? cfg.errorMinBytes : cfg.minBytes
     if (utf8Bytes(text) <= threshold) return decision
     var cand = buildCandidate(text, cfg)
     if (cand === null) return decision
     var ref = await spillOriginal(text, sessionId, exec.name, exec.callId)
     if (ref === undefined) { noteRecent('skip', exec.name, lastSkip, 0); return decision }
     var id = shortId('c')
-    // counters count ADOPTED compressions now (v2.1.x counted attempts the
-    // gates later rejected)
-    if (cand.lossless) comp.losslessEncodes++
-    if (cand.strategy === 'lines-strided') comp.tabularWindows++
-    comp.count++; comp.bytesBefore += cand.before; comp.bytesAfter += cand.after
-    var verbose = comp.count <= cfg.noticeFullTrailerCount
-    var finalText = buildNotice({
+    // The COMPLETE replacement (body + notice trailer + retrieval metadata)
+    // must pass the never-worse gates, not just the body. If a verbose trailer
+    // with the full retrieval hint would inflate the result, fall back to the
+    // compact trailer (same id + locator channels); if even the compact form
+    // cannot save anything, send the original unchanged.
+    var verbose = comp.count < cfg.noticeFullTrailerCount
+    var notice = {
       body: cand.text,
       id: id,
       before: cand.before,
       after: cand.after,
       lossless: cand.lossless,
+      strategy: cand.strategy,
       stats: cand.stats,
       locator: ref.locator,
       retrievalHint: ref.retrievalHint || '',
       verbose: verbose
-    })
+    }
+    var finalText = buildNotice(notice)
+    var finalGate = gate({ text: finalText, lossless: cand.lossless, strategy: cand.strategy, stats: cand.stats }, text, cfg)
+    if (finalGate === null) {
+      finalText = buildNotice(Object.assign({}, notice, { retrievalHint: '', verbose: false }))
+      finalGate = gate({ text: finalText, lossless: cand.lossless, strategy: cand.strategy, stats: cand.stats }, text, cfg)
+    }
+    if (finalGate === null) return decision
+    // counters count ADOPTED compressions (v2.1.x counted attempts the gates
+    // later rejected), measured on the actual final replacement text
+    if (cand.lossless) comp.losslessEncodes++
+    if (cand.strategy === 'lines-strided') comp.tabularWindows++
+    comp.count++; comp.bytesBefore += finalGate.before; comp.bytesAfter += finalGate.after
     rememberOriginal(id, text, ref.locator)
     rememberCompressed(id, text, finalText, exec.name)
-    noteRecent(cand.lossless ? 'lossless' : 'compress', exec.name, fmtInt(cand.before) + 'B -> ' + fmtInt(cand.after) + 'B (-' + Math.round((1 - cand.after / cand.before) * 100) + '%)', estTokens(text) - estTokens(finalText))
+    noteRecent(cand.lossless ? 'lossless' : 'compress', exec.name, fmtInt(finalGate.before) + 'B -> ' + fmtInt(finalGate.after) + 'B (-' + Math.round((1 - finalGate.after / finalGate.before) * 100) + '%)', estTokens(text) - estTokens(finalText))
     return { kind: 'accept', content: [{ type: 'text', text: finalText }] }
   }, { prepend: true })
 
@@ -400,12 +492,10 @@ export function apply(ctx, config) {
   ctx.on('llm/stream', function (options, next) {
     var rec = {
       ts: Date.now(), kind: options.purpose ? 'aux' : 'request',
-      session: options.sessionId ? String(options.sessionId).slice(-8) : '(direct)',
       provider: String(options.provider || ''), model: String(options.model || ''),
       estPrompt: 0, input: 0, cached: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0,
-      avoided: 0, replayHits: 0, closed: false, finish: ''
+      avoided: 0, replayHits: 0, closed: false
     }
-    var fullSid = options.sessionId ? String(options.sessionId) : undefined
     try {
       var texts = []
       if (typeof options.system === 'string') texts.push(options.system)
@@ -428,34 +518,28 @@ export function apply(ctx, config) {
         rec.cached += cr + cw
         rec.output += chunk.usage.outputTokens || 0
         rec.reasoning += chunk.usage.reasoningTokens || 0
-      } else if (chunk && chunk.type === 'finish' && chunk.reason) {
-        rec.finish = String(chunk.reason.kind || '')
       }
     }
     function closeRecord() {
       if (rec.closed) return
       rec.closed = true
-      rec.ms = Date.now() - rec.ts
-      if (fullSid !== undefined) {
-        lastEstBySession.set(fullSid, rec.estPrompt)
-        // real billed input for the session (main requests only — aux calls
-        // see a different context)
-        if (rec.kind !== 'aux' && rec.input + rec.cached > 0) lastBilledBySession.set(fullSid, rec.input + rec.cached)
-      }
       observeRatio(rec.model, rec.input + rec.cached, rec.estPrompt)
       var ratio = ratioFor(rec.model)
       if (rec.kind === 'aux') totals.auxRequests++; else totals.requests++
       totals.inputTokens += rec.input; totals.cachedTokens += rec.cached
       totals.cacheReadTokens += rec.cacheRead; totals.cacheWriteTokens += rec.cacheWrite
       totals.outputTokens += rec.output; totals.reasoningTokens += rec.reasoning
-      // avoided accounting is calibrated by the model's observed est/actual ratio
-      totals.avoidedTokens += Math.round(rec.avoided * ratio)
+      // avoided accounting is calibrated by the model's observed
+      // est/actual ratio and recorded once — chart records and totals use
+      // the same per-request contribution so they cannot disagree
+      rec.avoidedCal = Math.round(rec.avoided * ratio)
+      totals.avoidedTokens += rec.avoidedCal
       totals.estPromptTokens += rec.estPrompt
       comp.replays += rec.replayHits
       records.push(rec)
       if (records.length > 480) records.splice(0, records.length - 400)
       noteRecent(rec.kind === 'aux' ? 'aux' : 'request', rec.model || rec.provider || '?',
-        'prompt~' + fmtInt(rec.estPrompt) + ' tok, out ' + fmtInt(rec.output) + ', avoided ~' + fmtInt(Math.round(rec.avoided * ratio)) + (rec.replayHits ? ' (' + rec.replayHits + ' replayed)' : ''), Math.round(rec.avoided * ratio))
+        'prompt~' + fmtInt(rec.estPrompt) + ' tok, out ' + fmtInt(rec.output) + ', avoided ~' + fmtInt(rec.avoidedCal) + (rec.replayHits ? ' (' + rec.replayHits + ' replayed)' : ''), rec.avoidedCal)
     }
 
     var inner = next()
@@ -465,34 +549,6 @@ export function apply(ctx, config) {
       } finally { closeRecord() }
     }
     return tracked()
-  })
-
-  // ---------- arm 3: compaction assist at step boundaries (anti-overflow) ----------
-  ctx.on('agent/pre-step', async function (payload, next) {
-    try {
-      var sid = payload.agent && payload.agent.session ? String(payload.agent.session.header.id) : undefined
-      if (sid !== undefined && cfg.compactAssistEnabled) {
-        // real billed input is the truth; the heuristic estimate only covers
-        // the very first request of a session
-        var actual = lastBilledBySession.get(sid) || 0
-        var est = lastEstBySession.get(sid) || 0
-        var level = actual > 0 ? actual : est
-        var watermark = compactWatermark()
-        var lastAt = lastCompactAt.get(sid) || 0
-        var now = Date.now()
-        if (watermark > 0 && level > watermark && now - lastAt > cfg.compactCooldownMs) {
-          var cs = ctx.get('compaction')
-          if (cs !== undefined && typeof cs.compactIfNeeded === 'function') {
-            lastCompactAt.set(sid, now)
-            compactStats.attempts++
-            var res = await cs.compactIfNeeded(payload.agent, 'pressure', payload.signal)
-            if (res !== undefined && res !== null) { compactStats.done++; noteRecent('compact', payload.agent.options && payload.agent.options.model ? payload.agent.options.model : 'session', 'context ~' + fmtInt(level) + ' tok > watermark ' + fmtInt(watermark) + ' -> compaction applied', 0) }
-            else { compactStats.skipped++; noteRecent('compact', 'policy', 'pressure reported at ~' + fmtInt(level) + ' tok; engine declined (no-op)', 0) }
-          }
-        }
-      }
-    } catch (e) { console.error('save-token: compaction assist failed (non-fatal)', e) }
-    return next()
   })
 
   // ---------- arm 4: save_token_expand retrieval tool (CCR closure) ----------
@@ -505,8 +561,14 @@ export function apply(ctx, config) {
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: function (args, value) {
-        var t = value && typeof value.text === 'string' && value.text.length > 0 ? value.text : String((value && value.error) || 'not found')
-        return [{ type: 'text', text: t }]
+        if (value && typeof value.text === 'string' && value.text.length > 0) {
+          var out = value.text
+          if (value.truncated === true) {
+            out += '\n\n[save-token: expansion truncated at the in-memory cap of 262144 chars. FULL ORIGINAL at: ' + String(value.locator || '') + '. Use the read tool on that path.]'
+          }
+          return [{ type: 'text', text: out }]
+        }
+        return [{ type: 'text', text: String((value && value.error) || 'not found') }]
       }
     },
     execute: function (args) {
@@ -523,7 +585,7 @@ export function apply(ctx, config) {
       if (loc) {
         var store = ctx.get('spillStore')
         if (store && typeof store.readText === 'function') {
-          return store.readText({ locator: loc.locator }).then(function (out) {
+          return Promise.resolve().then(function () { return store.readText({ locator: loc.locator }) }).then(function (out) {
             var t = out && (typeof out.text === 'string' && out.text.length > 0 ? out.text : (typeof out === 'string' && out.length > 0 ? out : null))
             if (t) return { text: t, locator: loc.locator, truncated: false }
             return locatorFallback()
@@ -560,11 +622,26 @@ export function apply(ctx, config) {
             let args = {}
             try {
               const chunks = []
-              for await (const c of req) chunks.push(c)
+              let len = 0
+              for await (const c of req) {
+                len += c.length
+                if (len > 1 << 20) throw new Error('body too large')
+                chunks.push(c)
+              }
               const raw = Buffer.concat(chunks).toString('utf8')
-              if (raw) args = JSON.parse(raw)
-            } catch (e) { args = {} }
-            sendJson(res, 200, action === 'set-enabled' ? setEnabled(args) : resetAll())
+              if (raw.trim() !== '') args = JSON.parse(raw)
+              if (args === null || typeof args !== 'object' || Array.isArray(args)) throw new Error('body must be an object')
+            } catch (e) {
+              sendJson(res, 400, { ok: false, error: 'invalid JSON body' })
+              return
+            }
+            if (action === 'set-enabled') {
+              const out = setEnabled(args)
+              if (!out.ok) { sendJson(res, 400, out); return }
+              sendJson(res, 200, out)
+              return
+            }
+            sendJson(res, 200, resetAll())
             return
           }
           sendJson(res, 404, { ok: false, error: 'unknown save-token endpoint' })
@@ -584,7 +661,7 @@ export function apply(ctx, config) {
 
   function dashboardPayload() {
     var series = records.slice(-60).map(function (r) {
-      return { p: r.input + r.cached || r.estPrompt, a: r.avoided, aux: r.kind === 'aux' }
+      return { p: r.input + r.cached || r.estPrompt, a: r.avoidedCal, aux: r.kind === 'aux' }
     })
     var tools = []
     byTool.forEach(function (v, k) { tools.push({ name: k, count: v.count, savedBytes: v.savedBytes }) })
@@ -605,11 +682,6 @@ export function apply(ctx, config) {
       cacheHitPct: billedInput > 0 ? Math.round(totals.cacheReadTokens * 100 / billedInput) : 0,
       estRatio: ratioSamples > 0 ? Math.round(ratioSum / ratioSamples * 100) / 100 : null,
       compression: comp,
-      compaction: {
-        assistOn: cfg.compactAssistEnabled,
-        attempts: compactStats.attempts, done: compactStats.done, skipped: compactStats.skipped,
-        watermarkTok: compactWatermark(), budgetTok: cfg.compactBudgetTokens
-      },
       byTool: tools.slice(0, 8),
       series: series,
       recent: recent.slice(0, 18)
@@ -618,10 +690,10 @@ export function apply(ctx, config) {
 
   function setEnabled(args) {
     var a = args || {}
-    if (a.key === 'compress') cfg.compressEnabled = !!a.value
-    else if (a.key === 'dedupe') cfg.dedupeEnabled = !!a.value
-    else if (a.key === 'compactAssist') cfg.compactAssistEnabled = !!a.value
-    else return { ok: false }
+    var known = a.key === 'compress' || a.key === 'dedupe'
+    if (!known || typeof a.value !== 'boolean') return { ok: false }
+    if (a.key === 'compress') cfg.compressEnabled = a.value
+    else cfg.dedupeEnabled = a.value
     persistState()
     noteRecent('config', a.key, (a.value ? 'enabled' : 'disabled'), 0)
     return { ok: true, flags: { compress: cfg.compressEnabled, dedupe: cfg.dedupeEnabled, expandTool: true } }
@@ -633,11 +705,10 @@ export function apply(ctx, config) {
     totals.outputTokens = 0; totals.reasoningTokens = 0; totals.avoidedTokens = 0; totals.estPromptTokens = 0
     comp.count = 0; comp.bytesBefore = 0; comp.bytesAfter = 0; comp.dedupeHits = 0; comp.dedupeSavedBytes = 0; comp.replays = 0; comp.losslessEncodes = 0; comp.tabularWindows = 0
     comp.topLevelCalls = 0; comp.nestedCalls = 0
-    compactStats.attempts = 0; compactStats.done = 0; compactStats.skipped = 0
-    records.length = 0; recent.length = 0; byTool.clear(); compressedIndex.clear(); dedupeCache.clear(); originals.clear()
+    records.length = 0; recent.length = 0; byTool.clear(); compressedIndex.clear(); dedupeCache.clear(); dedupeRetainedChars = 0; originals.clear()
     startedAt = Date.now()
     return { ok: true }
   }
 
-  console.log('save-token v2 loaded: structure-aware compress + lossless tabular encode + expand tool + cache-aware compaction assist (off by default)')
+  console.log('save-token v2.4.5 loaded: structure-aware compress + lossless tabular encode + expand tool')
 }

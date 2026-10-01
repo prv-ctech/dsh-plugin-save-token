@@ -6,15 +6,6 @@ SW="$ROOT/sandboxes/swe"
 export UV_CACHE_DIR="$ROOT/.uv-cache"
 PAT="$ROOT/tasks/patches"
 
-val_instance() { # $1=dir $2=name $3=testfile $4=node_expr $5=test_diff $6=src_diff
-  local d="$1" name="$2" tf="$3" node="$4" tdiff="$5" sdiff="$6"
-  cd "$d" || return 1
-  patch -p1 --quiet -i "$tdiff" 2>/dev/null; local pr=$?
-  echo "[$name] test_patch_rc=$pr"
-  [ $pr -ne 0 ] && { echo "[$name] FAIL at test_patch"; return 1; }
-  SETUPTOOLS_SCM_PRETEND_VERSION_FAST=1 true
-}
-
 # ---------- SYMPY ----------
 echo "===== SYMPY ====="
 cd "$SW"

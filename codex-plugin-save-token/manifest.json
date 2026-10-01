@@ -1,6 +1,6 @@
 {
   "name": "codex-plugin-save-token",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "只降 token、不降智的 Codex CLI 插件（MCP stdio server）：结构感知压缩 + TOON 式无损编码优先 + 可逆落盘 + save_token_expand 取回全文",
   "format": "OpenAI Codex CLI plugin (MCP stdio server, config.toml [mcp_servers.save-token])",
   "install": "node scripts/install.mjs   (或 codex mcp add save-token -- node <abs>/src/index.js)",

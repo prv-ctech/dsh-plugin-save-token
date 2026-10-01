@@ -1,5 +1,5 @@
 /*!
- * dsh-plugin-save-token v2.4.1 — Client half (browser)
+ * dsh-plugin-save-token v2.4.5 — Client half (browser)
  * Live strip: in-flow pill (was an absolutely-positioned floater that
  * covered the tail of the last reply and sibling hover tooltips).
  *
@@ -33,11 +33,11 @@ const STR = {
     hintOn: 'Enabled — click to turn off',
     hintOff: 'Disabled — click to enable',
     on: 'ON', off: 'OFF',
-    toggleCompress: 'Compress', toggleDedupe: 'Dedupe', toggleCompact: 'Compact@{n}',
+    toggleCompress: 'Compress', toggleDedupe: 'Dedupe',
     reset: 'Reset',
     loading: 'Loading token stats...',
     spillWarn: 'Reversible storage unavailable -> compression stays off. ',
-    kpiRequests: 'Model requests', kpiRequestsSub: '+{n} aux (title/compaction)',
+    kpiRequests: 'Model requests', kpiRequestsSub: '+{n} aux (title/other)',
     kpiIn: 'Input tokens (actual)', kpiInSub: 'cache hit {p}% · {n} cached',
     kpiOut: 'Output tokens (actual)', kpiOutSub: '{n} reasoning',
     kpiAvoided: 'Tokens avoided (est)', kpiAvoidedSub: '~{p}% lighter context per call avg',
@@ -47,13 +47,13 @@ const STR = {
     cardCompress: 'Compression', cardCompressLine: ' reshaped, avg -{r}% bytes',
     cardCompressCalls: '{n} top-level · {m} nested calls',
     cardLossless: 'Lossless routes', cardLosslessLine: ' TOON-style re-encodes', cardLosslessSub: '{n} strided table windows',
-    cardDedupe: 'Dedupe / Compaction', cardDedupeStubbed: ' stubbed · ', cardDedupeCompactions: ' compactions', cardDedupeSub: '{b} deduped · assist @{t} tok',
+    cardDedupe: 'Dedupe', cardDedupeStubbed: ' stubbed · ', cardDedupeSub: '{b} saved by repeat stubs',
     topTools: 'Top tools by bytes kept out', topToolsEmpty: 'nothing compressed yet',
     recent: 'Recent activity',
     footer: 'Lossless-first: uniform JSON arrays are re-encoded deterministically (TOON-style) with zero information loss; regular outputs get structure-aware windows with line-numbered stride samples. Every replacement stays retrievable via the save_token_expand tool or the stored locator.',
     stripAvoided: '~{n} tok avoided', stripCompressed: '{n} compressed', stripLossless: ' ({n} lossless)', stripReqs: '{n} reqs',
     kindCompress: 'compressed', kindLossless: 'lossless', kindDedupe: 'deduped', kindRequest: 'request',
-    kindAux: 'aux-call', kindSkip: 'skipped', kindConfig: 'config', kindCompact: 'compaction',
+    kindAux: 'aux-call', kindSkip: 'skipped', kindConfig: 'config',
   },
   zh: {
     tagline: '结构感知 · 无损优先 · CCR',
@@ -61,11 +61,11 @@ const STR = {
     hintOn: '已启用——点击关闭',
     hintOff: '已停用——点击启用',
     on: '开', off: '关',
-    toggleCompress: '压缩', toggleDedupe: '去重', toggleCompact: 'Compaction@{n}',
+    toggleCompress: '压缩', toggleDedupe: '去重',
     reset: '重置',
     loading: '正在加载 token 统计…',
     spillWarn: '可逆存储不可用 → 压缩保持关闭。',
-    kpiRequests: '模型请求', kpiRequestsSub: '+{n} 辅助（标题/compaction）',
+    kpiRequests: '模型请求', kpiRequestsSub: '+{n} 辅助（标题/其他）',
     kpiIn: '输入 token（实际）', kpiInSub: '缓存命中 {p}% · 含 {n} 缓存',
     kpiOut: '输出 token（实际）', kpiOutSub: '{n} 推理',
     kpiAvoided: '节省 token（估算）', kpiAvoidedSub: '单次调用平均减轻 ~{p}% 上下文',
@@ -75,13 +75,13 @@ const STR = {
     cardCompress: '压缩统计', cardCompressLine: ' 次重塑,平均 -{r}% 字节',
     cardCompressCalls: '顶层 {n} 次 · 嵌套 {m} 次',
     cardLossless: '无损路径', cardLosslessLine: ' 次 TOON 式重编码', cardLosslessSub: '{n} 个抽采样表格窗口',
-    cardDedupe: '去重 / Compaction', cardDedupeStubbed: ' 次去重桩 · ', cardDedupeCompactions: ' 次 compaction', cardDedupeSub: '去重节省 {b} · 协助水位 @{t} tok',
+    cardDedupe: '去重', cardDedupeStubbed: ' 次去重桩 · ', cardDedupeSub: '重复桩节省 {b}',
     topTools: '节省字节最多的工具', topToolsEmpty: '还没有压缩记录',
     recent: '近期活动',
     footer: '无损优先:均匀 JSON 数组确定性重编码(TOON 式),零信息损失;常规输出走结构感知窗口,中段按行号抽采样。每次替换都可经 save_token_expand 工具或存储定位器一步取回。',
     stripAvoided: '已节省 ~{n} tok', stripCompressed: '压缩 {n} 次', stripLossless: '({n} 无损)', stripReqs: '{n} 次请求',
     kindCompress: '压缩', kindLossless: '无损', kindDedupe: '去重', kindRequest: '请求',
-    kindAux: '辅助', kindSkip: '跳过', kindConfig: '配置', kindCompact: 'compaction',
+    kindAux: '辅助', kindSkip: '跳过', kindConfig: '配置',
   },
 }
 
@@ -93,7 +93,7 @@ function tr(locale, key, vars) {
   return s
 }
 
-const CSS = '.st-wrap{display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--dsw-alias-label-primary,#1f2937)}\n.st-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}\n.st-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}\n.st-kpi{background:var(--dsw-alias-bg-layer-2,color-mix(in srgb,var(--dsw-alias-bg-base,#f7f7f8) 82%,transparent));border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:10px;padding:10px 12px;min-width:0}\n.st-kpi .st-v{font-size:19px;font-weight:650;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.st-kpi .st-s{color:var(--dsw-alias-label-secondary,#6b7280);font-size:11px;margin-top:3px;line-height:1.35}\n.st-card{background:var(--dsw-alias-bg-layer-2,color-mix(in srgb,var(--dsw-alias-bg-base,#f7f7f8) 82%,transparent));border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:10px;padding:12px 14px}\n.st-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#6b7280);letter-spacing:.02em;text-transform:uppercase}\n.st-green{color:var(--dsw-alias-state-success-primary,#15803d)}\n.st-dim{color:var(--dsw-alias-label-secondary,#6b7280)}\n.st-bar{height:8px;border-radius:4px;background:var(--dsw-alias-brand-primary,#2563eb);opacity:.85}\n.st-barrow{display:grid;grid-template-columns:minmax(90px,160px) 1fr auto;gap:10px;align-items:center;margin-top:8px;font-size:12px}\n.st-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}\n.st-table td{padding:4px 6px;border-top:1px solid var(--dsw-alias-border-l1,#eceef1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px}\n.st-badge{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;border:1px solid var(--dsw-alias-border-l1,#ddd)}\n.st-btn{border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:transparent;color:inherit;border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer}\n.st-btn:hover{border-color:var(--dsw-alias-brand-primary,#2563eb)}\n.st-btn.st-on{border-color:var(--dsw-alias-state-success-primary,#16a34a);background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 14%,transparent);color:var(--dsw-alias-state-success-primary,#15803d);font-weight:650}\n.st-btn.st-on:hover{border-color:var(--dsw-alias-state-success-primary,#16a34a);filter:brightness(1.08)}\n.st-btn.st-off{opacity:.5}\n.st-dot{display:inline-block;width:7px;height:7px;border-radius:999px;margin-right:6px;vertical-align:1px}\n.st-strip{position:static;display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;max-width:100%;margin:0 auto 6px;font-size:11.5px;color:var(--dsw-alias-label-secondary,#6b7280);background:var(--dsw-alias-bg-layer-2,color-mix(in srgb,var(--dsw-alias-bg-base,#f7f7f8) 82%,transparent));border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:999px;padding:3px 14px;pointer-events:none;width:max-content}'
+const CSS = '.st-wrap{display:flex;flex-direction:column;gap:14px;min-width:0;container-type:inline-size;overflow-wrap:anywhere;font-size:13px;color:var(--dsw-alias-label-primary,#1f2937)}\n.st-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}\n.st-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}\n.st-kpi{background:var(--dsw-alias-bg-layer-2,color-mix(in srgb,var(--dsw-alias-bg-base,#f7f7f8) 82%,transparent));border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:10px;padding:10px 12px;min-width:0}\n.st-kpi .st-v{font-size:19px;font-weight:650;margin-top:2px;overflow-wrap:anywhere}\n.st-kpi .st-s{color:var(--dsw-alias-label-secondary,#6b7280);font-size:11px;margin-top:3px;line-height:1.35}\n.st-card{min-width:0;background:var(--dsw-alias-bg-layer-2,color-mix(in srgb,var(--dsw-alias-bg-base,#f7f7f8) 82%,transparent));border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:10px;padding:12px 14px}\n.st-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#6b7280);letter-spacing:.02em;text-transform:uppercase}\n.st-green{color:var(--dsw-alias-state-success-primary,#15803d)}\n.st-dim{color:var(--dsw-alias-label-secondary,#6b7280)}\n.st-bar{height:8px;border-radius:4px;background:var(--dsw-alias-brand-primary,#2563eb);opacity:.85}\n.st-spark{display:flex;align-items:flex-end;gap:3px;height:56px;margin-top:10px;border-bottom:1px solid var(--dsw-alias-border-l1,#e5e7eb);overflow:hidden}\n.st-col{flex:0 0 7px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;border-radius:2px 2px 0 0;overflow:hidden}\n.st-col-a{width:100%;background:var(--dsw-alias-state-success-primary,#16a34a)}\n.st-col-p{width:100%;flex:1;background:var(--dsw-alias-border-l2,#c7cbd1)}\n.st-barrow{display:grid;grid-template-columns:minmax(0,160px) minmax(0,1fr) auto;gap:10px;align-items:center;margin-top:8px;font-size:12px}\n.st-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;margin-top:8px}\n.st-table td{padding:4px 6px;border-top:1px solid var(--dsw-alias-border-l1,#eceef1);vertical-align:top;white-space:normal;overflow-wrap:anywhere}\n.st-table td:nth-child(1){width:12%}\n.st-table td:nth-child(2){width:18%}\n.st-table td:nth-child(3){width:22%}\n.st-table td:nth-child(5){width:10%}\n.st-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}\n@container (max-width:560px){.st-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.st-cards{grid-template-columns:1fr}}\n@container (max-width:360px){.st-table,.st-table tbody{display:block}.st-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.st-table td:nth-child(n){width:auto}.st-table td:nth-child(3),.st-table td:nth-child(4){grid-column:1/-1}.st-table td:nth-child(5){grid-column:2}}\n.st-badge{display:inline-block;max-width:100%;box-sizing:border-box;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;border:1px solid var(--dsw-alias-border-l1,#ddd)}\n.st-btn{border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:transparent;color:inherit;border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer}\n.st-btn:hover{border-color:var(--dsw-alias-brand-primary,#2563eb)}\n.st-btn.st-on{border-color:var(--dsw-alias-state-success-primary,#16a34a);background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 14%,transparent);color:var(--dsw-alias-state-success-primary,#15803d);font-weight:650}\n.st-btn.st-on:hover{border-color:var(--dsw-alias-state-success-primary,#16a34a);filter:brightness(1.08)}\n.st-btn.st-off{opacity:.5}\n.st-dot{display:inline-block;width:7px;height:7px;border-radius:999px;margin-right:6px;vertical-align:1px}\n.st-strip-wrap{position:relative;display:flex;justify-content:center;min-width:0;width:100%;margin:0 0 6px}\n.st-strip{display:inline-flex;align-items:center;gap:7px;max-width:100%;overflow:hidden;white-space:nowrap;padding:3px 10px;border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:999px;background:var(--dsw-alias-bg-layer-2,color-mix(in srgb,var(--dsw-alias-bg-base,#f7f7f8) 82%,transparent));font-size:11.5px;line-height:1;color:var(--dsw-alias-label-secondary,#6b7280);font-variant-numeric:tabular-nums;cursor:default}\n.st-strip:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2563eb);outline-offset:2px}\n.st-strip b{font-weight:600;color:var(--dsw-alias-label-primary,#1f2937)}\n.st-strip .st-dot2{flex:0 0 auto;width:7px;height:7px;border-radius:999px;background:var(--dsw-alias-state-success-primary,#16a34a)}\n.st-strip-label{overflow:hidden;text-overflow:ellipsis}\n.st-strip-pop{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);display:none;flex-direction:column;gap:4px;min-width:200px;max-width:min(90vw,280px);padding:8px 10px;border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 6px 24px rgba(0,0,0,.14);color:var(--dsw-alias-label-primary,#1f2937);font-size:11.5px;line-height:1.35;z-index:30;pointer-events:none;font-variant-numeric:tabular-nums}\n.st-strip-wrap:hover .st-strip-pop,.st-strip-wrap:focus-within .st-strip-pop{display:flex}\n.st-pr{display:flex;justify-content:space-between;gap:14px}\n.st-pr>span:last-child{font-weight:600}\n@media (max-width:520px){.st-strip-label{display:none}}\n@media (max-width:420px){.st-strip .st-dim{display:none}}'
 
 let styled = false
 function ensureStyles() {
@@ -170,25 +170,32 @@ export function apply(ctx) {
   }
   function fmtTime(ts, locale) { try { return new Date(ts).toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour12: false }) } catch (e) { return '' } }
 
-  const KIND_LABEL = { compress: 'kindCompress', lossless: 'kindLossless', dedupe: 'kindDedupe', request: 'kindRequest', aux: 'kindAux', skip: 'kindSkip', config: 'kindConfig', compact: 'kindCompact' }
-  const KIND_COLOR = { compress: 'var(--dsw-alias-brand-primary,#2563eb)', lossless: 'var(--dsw-alias-state-success-primary,#16a34a)', dedupe: 'var(--dsw-alias-state-warn-primary,#b45309)', request: 'var(--dsw-alias-label-secondary,#6b7280)', aux: 'var(--dsw-alias-label-secondary,#6b7280)', skip: 'var(--dsw-alias-state-error-primary,#b91c1c)', config: 'var(--dsw-alias-label-secondary,#6b7280)', compact: 'var(--dsw-alias-state-warn-primary,#b45309)' }
+  const KIND_LABEL = { compress: 'kindCompress', lossless: 'kindLossless', dedupe: 'kindDedupe', request: 'kindRequest', aux: 'kindAux', skip: 'kindSkip', config: 'kindConfig' }
+  const KIND_COLOR = { compress: 'var(--dsw-alias-brand-primary,#2563eb)', lossless: 'var(--dsw-alias-state-success-primary,#16a34a)', dedupe: 'var(--dsw-alias-state-warn-primary,#b45309)', request: 'var(--dsw-alias-label-secondary,#6b7280)', aux: 'var(--dsw-alias-label-secondary,#6b7280)', skip: 'var(--dsw-alias-state-error-primary,#b91c1c)', config: 'var(--dsw-alias-label-secondary,#6b7280)' }
 
   function useDashboard(intervalMs) {
     const st = React.useState(null)
     const data = st[0], setData = st[1]
-    React.useEffect(function () {
-      let alive = true
-      const tick = async function () {
-        try {
-          const d = await apiGet('dashboard')
-          if (alive) setData(d)
-        } catch (e) { console.error('save-token dashboard poll failed', e) }
-      }
-      tick()
-      const timer = setInterval(tick, intervalMs)
-      return function () { alive = false; clearInterval(timer) }
+    const alive = React.useRef(false)
+    const requestSeq = React.useRef(0)
+    const lastApplied = React.useRef(0)
+    const refresh = React.useCallback(async function () {
+      const request = ++requestSeq.current
+      try {
+        const d = await apiGet('dashboard')
+        if (alive.current && request > lastApplied.current) {
+          lastApplied.current = request
+          setData(d)
+        }
+      } catch (e) { console.error('save-token dashboard poll failed', e) }
     }, [])
-    return [data, setData]
+    React.useEffect(function () {
+      alive.current = true
+      refresh()
+      const timer = setInterval(refresh, intervalMs)
+      return function () { alive.current = false; clearInterval(timer) }
+    }, [intervalMs, refresh])
+    return [data, refresh]
   }
 
   function Kpi(props) {
@@ -201,19 +208,20 @@ export function apply(ctx) {
   function Spark(props) {
     const series = props.series || []
     if (series.length === 0) return h('div', { className: 'st-dim' }, props.t('noRequests'))
-    const n = series.length
     let maxV = 1
-    for (let i = 0; i < n; i++) maxV = Math.max(maxV, (series[i].p || 0) + (series[i].a || 0))
-    const W = n * 7, H = 48
-    const bars = []
-    for (let j = 0; j < n; j++) {
-      const p = series[j].p || 0, a = series[j].a || 0
-      const ph = Math.max(p > 0 ? 2 : 0, Math.round(p / maxV * 40))
-      const ah = Math.round(a / maxV * 40)
-      bars.push(h('rect', { key: 'p' + j, x: j * 7, y: H - 4 - ph - ah, width: 5, height: ph, fill: 'var(--dsw-alias-border-l2,#c7cbd1)' }))
-      if (ah > 0) bars.push(h('rect', { key: 'a' + j, x: j * 7, y: H - 4 - ah, width: 5, height: ah, fill: 'var(--dsw-alias-state-success-primary,#16a34a)' }))
-    }
-    return h('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H, preserveAspectRatio: 'none' }, bars)
+    for (let i = 0; i < series.length; i++) maxV = Math.max(maxV, (series[i].p || 0) + (series[i].a || 0))
+    // Fixed-width columns keep one request from stretching across the panel.
+    // Each bar is the full context weight: green (avoided) over gray (sent).
+    return h('div', { className: 'st-spark', role: 'img', 'aria-label': props.label || props.t('chartTitle') },
+      series.map(function (s, j) {
+        const p = Math.max(0, s.p || 0), a = Math.max(0, s.a || 0)
+        const total = p + a
+        const heightPct = total > 0 ? Math.max(3, Math.round(total / maxV * 100)) : 3
+        const avoidedPct = total > 0 ? Math.round(a / total * 100) : 0
+        return h('div', { key: j, className: 'st-col', style: { height: heightPct + '%' } },
+          a > 0 ? h('div', { className: 'st-col-a', style: { height: avoidedPct + '%' } }) : null,
+          h('div', { className: 'st-col-p' }))
+      }))
   }
 
   function Toggle(props) {
@@ -236,7 +244,6 @@ export function apply(ctx) {
     if (!d) return h('div', { className: 'st-dim' }, T('loading'))
     const t = d.totals || {}
     const c = d.compression || {}
-    const cm = d.compaction || { attempts: 0, done: 0, skipped: 0, budgetTok: 0 }
     const avgPrompt = t.requests > 0 ? Math.round(t.estPromptTokens / t.requests) : 0
     const avgAvoided = t.requests > 0 ? Math.round(t.avoidedTokens / t.requests) : 0
     const ratio = c.bytesBefore > 0 ? Math.round((1 - c.bytesAfter / c.bytesBefore) * 100) : 0
@@ -251,7 +258,6 @@ export function apply(ctx) {
       h('div', { className: 'st-row' },
         h(Toggle, { k: 'compress', label: T('toggleCompress'), on: d.flags.compress, onChange: refresh, t: T }),
         h(Toggle, { k: 'dedupe', label: T('toggleDedupe'), on: d.flags.dedupe, onChange: refresh, t: T }),
-        h(Toggle, { k: 'compactAssist', label: T('toggleCompact', { n: fmtTok(cm.watermarkTok || cm.budgetTok || 120000) }), on: !!cm.assistOn, onChange: refresh, t: T }),
         h('span', { style: { flex: 1 } }),
         h('button', {
           className: 'st-btn',
@@ -269,10 +275,10 @@ export function apply(ctx) {
         h(Kpi, { label: T('kpiAvoided'), value: fmtTok(t.avoidedTokens || 0), green: true, sub: T('kpiAvoidedSub', { p: d.reliefPct }) })),
       h('div', { className: 'st-card' },
         h('div', { className: 'st-title' }, T('chartTitle')),
-        h(Spark, { series: d.series || [], t: T }),
+        h(Spark, { series: d.series || [], t: T, label: T('chartTitle') + ' ' + T('chartSub', { a: fmtTok(avgPrompt), b: fmtTok(avgAvoided) }) }),
         h('div', { className: 'st-s st-dim', style: { marginTop: 6 } },
           T('chartSub', { a: fmtTok(avgPrompt), b: fmtTok(avgAvoided) }))),
-      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 } },
+      h('div', { className: 'st-cards' },
         h('div', { className: 'st-card' },
           h('div', { className: 'st-title' }, T('cardCompress')),
           h('div', { style: { marginTop: 6 } },
@@ -290,15 +296,15 @@ export function apply(ctx) {
         h('div', { className: 'st-card' },
           h('div', { className: 'st-title' }, T('cardDedupe')),
           h('div', { style: { marginTop: 6 } },
-            h('div', null, h('b', null, String(c.dedupeHits || 0)), T('cardDedupeStubbed'), h('b', null, String(cm.done || 0)), '/', String(cm.attempts || 0), T('cardDedupeCompactions'))),
+            h('div', null, h('b', null, String(c.dedupeHits || 0)), T('cardDedupeStubbed'))),
           h('div', { className: 'st-s st-dim', style: { marginTop: 4 } },
-            T('cardDedupeSub', { b: fmtBytes(c.dedupeSavedBytes || 0), t: fmtTok(cm.watermarkTok || cm.budgetTok || 0) })))),
+            T('cardDedupeSub', { b: fmtBytes(c.dedupeSavedBytes || 0) })))),
       h('div', { className: 'st-card' },
         h('div', { className: 'st-title' }, T('topTools')),
         (d.byTool || []).length === 0 ? h('div', { className: 'st-dim', style: { marginTop: 8 } }, T('topToolsEmpty')) :
           h('div', null, (d.byTool || []).map(function (tool) {
             return h('div', { className: 'st-barrow', key: tool.name },
-              h('span', { className: 'st-dim', style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, tool.name),
+              h('span', { className: 'st-dim' }, tool.name),
               h('div', { className: 'st-bar', style: { width: Math.max(4, Math.round(tool.savedBytes * 100 / maxSaved)) + '%' } }),
               h('span', null, fmtBytes(tool.savedBytes) + ' / ' + tool.count + 'x'))
           }))),
@@ -325,13 +331,25 @@ export function apply(ctx) {
     const T = function (k, v) { return tr(L, k, v) }
     if (!d) return null
     const t = d.totals || {}
-    const cc = (d.compression && d.compression.count) || 0
-    const ll = (d.compression && d.compression.losslessEncodes) || 0
-    return h('div', { className: 'st-strip' },
-      h('span', null, 'token-saver'),
-      h('span', null, h('b', null, T('stripAvoided', { n: fmtTok(t.avoidedTokens || 0) }))),
-      h('span', null, T('stripCompressed', { n: fmtTok(cc) }) + (ll > 0 ? T('stripLossless', { n: ll }) : '')),
-      h('span', null, T('stripReqs', { n: fmtTok((t.requests || 0)) })))
+    const c = d.compression || {}
+    const cc = c.count || 0
+    const ll = c.losslessEncodes || 0
+    const avoided = fmtTok(t.avoidedTokens || 0)
+    const reqs = fmtTok(t.requests || 0)
+    const cachePct = d.cacheHitPct != null ? d.cacheHitPct : 0
+    const summary = T('stripAvoided', { n: avoided }) + ' · ' + T('stripCompressed', { n: fmtTok(cc) }) + (ll > 0 ? T('stripLossless', { n: ll }) : '') + ' · ' + T('stripReqs', { n: reqs })
+    return h('div', { className: 'st-strip-wrap' },
+      h('div', { className: 'st-strip', tabIndex: 0, 'aria-label': 'token-saver: ' + summary },
+        h('span', { className: 'st-dot2', 'aria-hidden': 'true' }),
+        h('span', { className: 'st-strip-label' }, 'token-saver'),
+        h('b', null, T('stripAvoided', { n: avoided })),
+        h('span', { className: 'st-dim' }, T('stripReqs', { n: reqs }))),
+      h('div', { className: 'st-strip-pop', role: 'tooltip' },
+        h('div', { className: 'st-pr' }, h('span', null, T('kpiAvoided')), h('span', { className: 'st-green' }, avoided)),
+        h('div', { className: 'st-pr' }, h('span', null, T('cardCompress')), h('span', null, fmtTok(cc))),
+        h('div', { className: 'st-pr' }, h('span', null, T('cardLossless')), h('span', null, String(ll))),
+        h('div', { className: 'st-pr' }, h('span', null, T('kpiRequests')), h('span', null, reqs)),
+        h('div', { className: 'st-pr' }, h('span', null, T('kpiIn')), h('span', null, cachePct + '% cached'))))
   }
 
   ctx.slots.inject('settings.section', function () {

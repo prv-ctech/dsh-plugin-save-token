@@ -1,6 +1,6 @@
 {
   "name": "codex-plugin-save-token",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Cut token cost without cutting model intelligence — a Codex CLI plugin (MCP stdio server): structure-aware compression + TOON-style lossless encoding + reversible spill-to-disk + save_token_expand retrieval. Ported from dsh-plugin-save-token.",
   "license": "MIT",
   "type": "module",

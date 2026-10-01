@@ -1,5 +1,5 @@
 /*!
- * dsh-plugin-save-token v2.4.1 — pure compression/format helpers (host half)
+ * dsh-plugin-save-token v2.4.5 — pure compression/format helpers (host half)
  *
  * Extracted from src/index.js so the whole compression brain is unit-testable
  * with `node --test test/` (no host imports, no I/O, no state). Every function
@@ -45,30 +45,55 @@ export function argsToString(args) {
 }
 
 /**
- * Dedupe key for a tool result. Fixes two v2.1.x defects:
+ * Dedupe bucket key for a tool result. Fixes two v2.1.x defects:
  * - the key carries the owning session id, so two sessions/agents sharing one
  *   process never get each other's "remains in context above" stubs (that
  *   claim would be false across sessions);
- * - fingerprints hash the FULL string. The old 4096-char (args) / 64KB
- *   (content) truncation could declare two different outputs byte-identical
- *   when they merely shared a long prefix, violating the reversibility red
- *   line. FNV-1a is O(n); hashing megabyte strings costs well under a
- *   millisecond, so the cap bought nothing.
+ * - fingerprints hash the FULL string, so a long common prefix cannot be the
+ *   only thing compared. FNV-1a is O(n); hashing megabyte strings costs well
+ *   under a millisecond, so the old truncation cap bought nothing.
+ *
+ * The 32-bit FNV value is a bucket key only — distinct inputs can collide.
+ * Callers claiming byte identity MUST compare the full args/content literally
+ * before adopting a stub.
  */
 export function dedupeFingerprint(sessionId, toolName, argsString, content) {
-  return (sessionId === undefined ? '(none)' : String(sessionId)) + '|' + toolName + '|' + fnv1a(argsString || '') + '|' + fnv1a(content)
+  return JSON.stringify([sessionId === undefined ? null : String(sessionId), toolName, fnv1a(argsString || ''), fnv1a(content)])
 }
 
 // ---------- TOON-style lossless tabular encoding ----------
+// Quoting carries the type: null/booleans/numbers print as canonical unquoted
+// literals; strings print bare unless they would re-read as one of those
+// literals (or need CSV quoting for ", newline or CR).
+function looksLikeScalarLiteral(s) {
+  return /^(?:null|true|false|NaN|-?Infinity|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(s)
+}
+
+// JSON.parse can round large integers/decimals or overflow to Infinity. Only
+// use its values for a lossless route when every raw numeric token survives
+// String(Number(token)) exactly. Strings (including escaped quotes) are skipped.
+// Noncanonical but equivalent spellings may safely take a disclosed lossy route.
+function exactJsonNumbers(text) {
+  var tokens = /"(?:[^"\\]|\\[\s\S])*"|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/g
+  var match
+  while ((match = tokens.exec(text)) !== null) {
+    if (match[1] !== undefined && match[1] !== String(Number(match[1]))) return false
+  }
+  return true
+}
+
 export function csvCell(v) {
+  if (v === null) return 'null'
+  if (typeof v === 'number') return String(v)
+  if (typeof v === 'boolean') return v ? 'true' : 'false'
   var s = String(v)
-  if (/[",\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"'
+  if (s === '' || s.trim() !== s || /[",\n\r\t]/.test(s) || looksLikeScalarLiteral(s)) s = '"' + s.replace(/"/g, '""') + '"'
   return s
 }
 
 function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array.isArray(v) }
 
-function safeHeaderTok(k) { return typeof k === 'string' && k !== '' && !/["',{}\[\]:\n\r\t]/.test(k) }
+function safeHeaderTok(k) { return typeof k === 'string' && k !== '' && !/["',{}\[\]:.\s]/.test(k) }
 
 /**
  * Legacy flat check kept for compatibility: arrays of >=8 objects whose keys
@@ -134,6 +159,7 @@ export function uniformTabular(arr) {
         var v1 = arr[r1][k]
         if (v1 !== null && typeof v1 === 'object') return null
       }
+      if (!safeHeaderTok(k)) return null
       groups.push({ header: k, get: (function (key) { return function (row) { return [row[key]] } })(k) })
       width++
       continue
@@ -209,17 +235,17 @@ export function toonEncode(arr, keys, nameArg) {
  */
 export function findDominantUniformArray(parsed, minLen) {
   minLen = minLen || 8
-  if (Array.isArray(parsed)) return { arr: parsed, name: 'items', parent: null, key: null, isRoot: true }
+  if (Array.isArray(parsed)) return { arr: parsed, name: 'items', parent: null, key: null, isRoot: true, path: 'items' }
   if (!isPlainObject(parsed)) return null
   var best = null
-  function consider(arr, name, parent, key) {
+  function consider(arr, name, parent, key, path) {
     if (arr.length >= minLen && (best === null || arr.length > best.arr.length)) {
-      best = { arr: arr, name: name, parent: parent, key: key, isRoot: false }
+      best = { arr: arr, name: name, parent: parent, key: key, isRoot: false, path: path }
     }
   }
   for (var k in parsed) {
     var v = parsed[k]
-    if (Array.isArray(v)) consider(v, k, parsed, k)
+    if (Array.isArray(v) && safeHeaderTok(k)) consider(v, k, parsed, k, k)
   }
   if (best === null) {
     for (var k2 in parsed) {
@@ -227,7 +253,7 @@ export function findDominantUniformArray(parsed, minLen) {
       if (isPlainObject(v2)) {
         for (var k3 in v2) {
           var v3 = v2[k3]
-          if (Array.isArray(v3)) consider(v3, k3, v2, k3)
+          if (Array.isArray(v3) && safeHeaderTok(k2) && safeHeaderTok(k3)) consider(v3, k3, v2, k3, k2 + '.' + k3)
         }
       }
     }
@@ -251,8 +277,7 @@ export function keyedMapRows(parsed) {
     var v = parsed[ks[i]]
     if (!isPlainObject(v)) return null
     if (Object.prototype.hasOwnProperty.call(v, 'key')) return null
-    var row = { key: ks[i] }
-    for (var vk in v) row[vk] = v[vk]
+    var row = { key: ks[i], ...v }
     rows.push(row)
   }
   return rows
@@ -261,28 +286,41 @@ export function keyedMapRows(parsed) {
 // ---------- rtk-style line compressor (+ structure-aware table mode) ----------
 export var ERROR_LINE_RE = /(fatal|panic|traceback|exception|\berror\b|err:|fail(?:ed|ure|ing)?\b|denied|rejected|timeout|timed out|abort|cannot|unable to|syntax error|assertion|segfault)/i
 
-export function collapseBlanks(lines) {
-  var out = [], blanks = 0
+// Collapse helpers track original 1-based line numbers alongside each kept
+// line (0 = synthetic fold line), so window labels can reference the SOURCE
+// line even after collapsing. Public string overloads keep their old shapes.
+function collapseBlanksNums(lines, nums) {
+  var out = [], ons = [], blanks = 0
   for (var i = 0; i < lines.length; i++) {
     if (lines[i].trim() === '') { blanks++; if (blanks >= 2) continue } else blanks = 0
-    out.push(lines[i])
+    out.push(lines[i]); ons.push(nums[i])
   }
-  return out
+  return { lines: out, nums: ons }
 }
 
-export function collapseRepeats(lines) {
-  var out = [], i = 0
+function collapseRepeatsNums(lines, nums) {
+  var out = [], ons = [], i = 0
   while (i < lines.length) {
     var j = i
     while (j < lines.length && lines[j] === lines[i]) j++
     var run = j - i
     if (run > 4 && lines[i].trim() !== '') {
-      out.push(lines[i])
-      out.push('[x' + run + ' identical lines]')
-    } else { for (var k = i; k < j; k++) out.push(lines[k]) }
+      out.push(lines[i]); ons.push(nums[i])
+      out.push('[x' + run + ' identical lines]'); ons.push(0) // synthetic
+    } else {
+      for (var k = i; k < j; k++) { out.push(lines[k]); ons.push(nums[k]) }
+    }
     i = j
   }
-  return out
+  return { lines: out, nums: ons }
+}
+
+export function collapseBlanks(lines) {
+  return collapseBlanksNums(lines, lines.map(function (_l, i) { return i + 1 })).lines
+}
+
+export function collapseRepeats(lines) {
+  return collapseRepeatsNums(lines, lines.map(function (_l, i) { return i + 1 })).lines
 }
 
 export function trimLongLines(lines, longLineChars) {
@@ -327,7 +365,11 @@ export function looksTabular(lines, cfg) {
   return bestKey.charAt(0) !== 'x' && best >= dense.length * 0.7 && best >= 12
 }
 
-export function windowLines(lines, cfg) {
+function labelled(num, line) {
+  return num > 0 ? 'L' + num + ': ' + line : line
+}
+
+export function windowLines(lines, cfg, nums) {
   if (lines.length <= cfg.maxLines) return { lines: lines }
   var head = lines.slice(0, cfg.headLines)
   var tail = lines.slice(lines.length - cfg.tailLines)
@@ -355,7 +397,7 @@ export function windowLines(lines, cfg) {
     out.push('[save-token kept ' + rows + ' error-related lines (with +-1 context lines) from the omitted region:]')
     for (var rg = 0; rg < ranges.length; rg++) {
       for (var m = ranges[rg].lo; m <= ranges[rg].hi; m++) {
-        out.push('L' + (cfg.headLines + m + 1) + ': ' + middle[m])
+        out.push(labelled(nums ? nums[cfg.headLines + m] : cfg.headLines + m + 1, middle[m]))
       }
     }
   }
@@ -363,7 +405,7 @@ export function windowLines(lines, cfg) {
   return { lines: out }
 }
 
-export function windowLinesStrided(lines, cfg) {
+export function windowLinesStrided(lines, cfg, nums) {
   if (lines.length <= cfg.maxLines) return { lines: lines }
   var headN = cfg.tabularHeadRows, tailN = cfg.tabularTailRows
   var middle = lines.slice(headN, lines.length - tailN)
@@ -371,21 +413,23 @@ export function windowLinesStrided(lines, cfg) {
   var out = lines.slice(0, headN)
   out.push('[... +' + middle.length + ' data rows omitted; every ' + stride + '. row sampled below WITH original line numbers so any range can be retrieved precisely ...]')
   for (var i = 0; i < middle.length; i += stride) {
-    out.push('L' + (headN + i + 1) + ': ' + middle[i])
+    out.push(labelled(nums ? nums[headN + i] : headN + i + 1, middle[i]))
   }
   out = out.concat(lines.slice(lines.length - tailN))
   return { lines: out, strided: true }
 }
 
 export function compressLinesText(text, cfg) {
-  var lines = collapseBlanks(text.split('\n'))
-  lines = collapseRepeats(lines)
-  lines = trimLongLines(lines, cfg.longLineChars)
+  var src = text.split('\n')
+  var collapsedBlanks = collapseBlanksNums(src, src.map(function (_l, i) { return i + 1 }))
+  var collapsedRuns = collapseRepeatsNums(collapsedBlanks.lines, collapsedBlanks.nums)
+  var lines = trimLongLines(collapsedRuns.lines, cfg.longLineChars)
+  var nums = collapsedRuns.nums
   if (looksTabular(lines, cfg)) {
-    var t = windowLinesStrided(lines, cfg)
+    var t = windowLinesStrided(lines, cfg, nums)
     return { text: t.lines.join('\n'), strided: t.strided === true }
   }
-  var w = windowLines(lines, cfg)
+  var w = windowLines(lines, cfg, nums)
   return { text: w.lines.join('\n'), strided: false }
 }
 
@@ -476,7 +520,8 @@ export function jsonRoutes(text, cfg) {
   var routes = []
 
   var toon = null
-  var dom = findDominantUniformArray(parsed, 8)
+  var exactNumbers = exactJsonNumbers(t)
+  var dom = exactNumbers ? findDominantUniformArray(parsed, 8) : null
   if (dom !== null) {
     var tab = uniformTabular(dom.arr)
     if (tab !== null) {
@@ -484,19 +529,19 @@ export function jsonRoutes(text, cfg) {
       if (dom.isRoot) {
         parts.push(toonEncodeCols(dom.arr, tab, dom.name))
       } else {
-        // rest of the document minus the tabularized array; deleting the key
-        // leaves an empty wrapper that marks the array's position — nothing
-        // is lost, the array is right below as a table
+        // rest of the document minus the tabularized array; the emitted table
+        // heading carries safe parent segments. Keep even the empty object
+        // wrapper to distinguish {items:[...]} from a root array.
         delete dom.parent[dom.key]
-        var restJson = Object.keys(parsed).length > 0 ? JSON.stringify(parsed) : ''
+        var restJson = JSON.stringify(parsed)
         parts.push(restJson)
-        parts.push(toonEncodeCols(dom.arr, tab, dom.name))
+        parts.push(toonEncodeCols(dom.arr, tab, dom.path))
       }
       var enc2 = parts.filter(function (s) { return s.length > 0 }).join('\n')
       if (enc2.length >= 20) toon = { text: enc2, strategy: 'toon-array' }
     }
   }
-  if (toon === null && isPlainObject(parsed)) {
+  if (toon === null && exactNumbers && isPlainObject(parsed)) {
     var rows = keyedMapRows(parsed)
     if (rows !== null) {
       var ktab = uniformTabular(rows)
@@ -535,7 +580,7 @@ export function compressJsonlText(text, cfg) {
     if (ln === '') continue
     var p
     try { p = JSON.parse(ln) } catch (e) { return null }
-    if (!isPlainObject(p)) return null
+    if (!isPlainObject(p) || !exactJsonNumbers(ln)) return null
     rows.push(p)
   }
   if (rows.length < (cfg.jsonlMinLines || 8)) return null
@@ -546,22 +591,14 @@ export function compressJsonlText(text, cfg) {
   return { text: out, lossless: true, strategy: 'jsonl' }
 }
 
-/**
- * Effective trigger floor: an output can never pass the never-worse gates
- * (save >= minSavingBytes AND keep <= keepRatioMax) unless it is at least
- * minSavingBytes / (1 - keepRatioMax) bytes — below that, building a
- * candidate is wasted work. Returns the size threshold in bytes.
- */
-export function effectiveMinBytes(minBytes, minSavingBytes, keepRatioMax) {
-  if (keepRatioMax < 1) return Math.max(minBytes, Math.ceil(minSavingBytes / (1 - keepRatioMax)))
-  return minBytes
-}
-
-/**
- * Apply the never-worse double gate (byte + token) to one route candidate.
- * Returns the gated candidate or null (route rejected).
- */
-function gate(route, text, cfg) {
+// Apply the never-worse double gate (byte + token) to one route candidate AND,
+// in the host, to the complete replacement including its notice trailer.
+// Pattern applied: a replacement is only adopted when it saves at least
+// minSavingBytes and lands under keepRatioMax of the original; a 500/0.28
+// derived trigger floor once misread keepRatioMax as a required retained ratio,
+// silently forbidding fuller savings below 1786 bytes.
+// Returns the gated replacement or null (route rejected).
+export function gate(route, text, cfg) {
   if (!route) return null
   var candidate = route.text
   if (!candidate || candidate.length < 20) return null
@@ -604,6 +641,8 @@ export function buildCandidate(text, cfg) {
  */
 export function buildNotice(opts) {
   var head = opts.lossless ? ' losslessly re-encoded' : ' compressed'
+  if (opts.lossless && opts.strategy === 'toon-keyed') head += ' keyed map (key column = original map key)'
+  if (opts.lossless && opts.strategy === 'jsonl') head += ' JSONL (one object per original line)'
   var id = opts.id
   if (!opts.verbose) {
     return opts.body + '\n\n[save-token #' + id + head + ': ' + fmtInt(opts.before) + ' -> ' + fmtInt(opts.after) + ' bytes. expand: save_token_expand id="' + id + '" | full: ' + opts.locator + ']'

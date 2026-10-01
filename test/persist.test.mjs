@@ -37,15 +37,15 @@ async function call(handler, method, url, body) {
 test('GUI toggle survives a restart via $DSH_HOME/plugin-state', async () => {
   const first = makeCtx()
   apply(first.ctx, {})
-  const toggle = await call(first.handlers['/save-token'], 'POST', '/save-token/api/set-enabled', { key: 'compactAssist', value: true })
+  const toggle = await call(first.handlers['/save-token'], 'POST', '/save-token/api/set-enabled', { key: 'dedupe', value: false })
   assert.equal(toggle.ok, true)
 
   // restart: a fresh apply must read the persisted override back
   const second = makeCtx()
   apply(second.ctx, {})
   const dash = await call(second.handlers['/save-token'], 'GET', '/save-token/api/dashboard')
-  assert.equal(dash.compaction.assistOn, true)
+  assert.equal(dash.flags.dedupe, false)
 
   const saved = JSON.parse(readFileSync(join(home, 'plugin-state', 'save-token-state.json'), 'utf8'))
-  assert.equal(saved.config.compactAssistEnabled, true)
+  assert.equal(saved.config.dedupeEnabled, false)
 })

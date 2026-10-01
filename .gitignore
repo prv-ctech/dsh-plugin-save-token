@@ -1,2 +1,7 @@
 node_modules/
 *.tsbuildinfo
+
+# Internal working notes — not published
+/bench/repair-plan.md
+/bench/verification.md
+/ponytail_review_result.txt

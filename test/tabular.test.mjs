@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   collapseBlanks, collapseRepeats, trimLongLines,
-  looksTabular, windowLines, windowLinesStrided, compressLinesText, effectiveMinBytes
+  looksTabular, windowLines, windowLinesStrided, compressLinesText,
+  buildCandidate
 } from '../src/compress.js'
 
 var cfg = {
@@ -124,13 +125,18 @@ test('compressLinesText: short text passes through', () => {
   assert.equal(r.strided, false)
 })
 
-test('effectiveMinBytes: never-worse arithmetic floor (E3)', () => {
-  // 500 / (1 - 0.72) = 1785.71 -> 1786
-  assert.equal(effectiveMinBytes(1400, 500, 0.72), 1786)
-  // floor never LOWERS the configured minimum, only raises it
-  assert.equal(effectiveMinBytes(6000, 500, 0.72), 6000)
-  assert.equal(effectiveMinBytes(1400, 100, 0.5), 1400)
-  assert.equal(effectiveMinBytes(150, 100, 0.5), 200) // 100 / (1-0.5)
-  // degenerate keepRatioMax >= 1 -> just minBytes
-  assert.equal(effectiveMinBytes(1400, 500, 1), 1400)
+test('buildCandidate: valid output below 1786 bytes still compresses (E3)', () => {
+  // Repeated lines collapse well under the real never-worse gates. The retired
+  // minSavingBytes/(1-keepRatioMax) trigger floor wrongly skipped fixtures like
+  // this one, misreading keepRatioMax as a required retained ratio.
+  var original = 'abcdefghijklmn\n'.repeat(100)
+  assert.equal(Buffer.byteLength(original), 1500)
+  var cand = buildCandidate(original, {
+    keepRatioMax: 0.72, minSavingBytes: 500, jsonMaxParseBytes: 524288,
+    maxLines: 240, headLines: 140, tailLines: 80,
+    tabularHeadRows: 60, tabularTailRows: 40, tabularStrideSamples: 50,
+    longLineChars: 420
+  })
+  assert.ok(cand, 'valid candidate')
+  assert.ok(cand.before - cand.after >= 500, 'saves at least minSavingBytes')
 })

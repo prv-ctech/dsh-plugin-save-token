@@ -12,9 +12,6 @@
  */
 
 import fs from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
-import { fileURLToPath } from 'node:url'
 import { aggregateStats, defaultStatsPath } from '../src/stats.js'
 
 function fmtInt(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') }

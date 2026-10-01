@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-save-token",
-  "version": "2.4.3",
+  "version": "2.4.5",
   "description": "只降 token、不降智的 DSH bundle 插件：结构感知压缩 + TOON 式无损编码优先 + 可逆落盘 + 实时 Dashboard",
   "format": "deepseek-harness (dsh) profile bundle / Cordis plugin",
   "install": "dsh plugin --profile web add dsh-plugin-save-token",
