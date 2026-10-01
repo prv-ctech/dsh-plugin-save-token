@@ -29,7 +29,7 @@ by = defaultdict(lambda: defaultdict(list))
 for r in rows: by[r['taskId']][r['arm']].append(r)
 order = ['gaia-l2-locomotives','gaia-l2-arxiv-regulation','tb-access-logs','tb-jsonl-aggregator','swe-sympy-24562','swe-django-16595']
 
-L = ['# save-token 插件 A/B 对照汇总（自动生成；解读见 report_2026-08-29.md）\n']
+L = ['# save-token 插件 A/B 对照汇总（自动生成）\n']
 L.append('> 两臂提示词对称（HARD CONSTRAINTS：禁文件重定向/禁 read 批量查看/测试输出必须可见；唯一变量=插件 compress/dedupe 开关）。')
 L.append('> 判定: TB 官方脚本 / SWE F2P+P2P(v2) / GAIA 答案比对。ce=插件压缩事件数, avoided=插件回放估计的免传输 tokens（旁证口径）。\n')
 
